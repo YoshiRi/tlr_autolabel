@@ -73,33 +73,49 @@ def det_preprocess(img, w, h, rgb=False, norm=1.0):
         resized = resized[:, :, ::-1]
     canvas = np.full((h, w, 3), 114, dtype=np.uint8)
     canvas[:nh, :nw] = resized
-    blob = (canvas.astype(np.float32) * norm).transpose(2, 0, 1)[None, ...]  # NCHW
+    # ascontiguousarray after the transpose is load-bearing for speed: a
+    # non-contiguous blob makes every downstream serialization (tofile to the
+    # trt_run helper) do an element-wise gather (~400 ms vs ~26 ms for 9.4 MB).
+    blob = np.ascontiguousarray(
+        (canvas.astype(np.float32) * norm).transpose(2, 0, 1)[None, ...])  # NCHW
     return blob, scale
+
+
+_grid_cache = {}
+
+
+def det_grids(w, h):
+    """(num_grids, 3) columns [gx, gy, stride] matching the yolox output order."""
+    key = (w, h)
+    if key not in _grid_cache:
+        parts = []
+        for s in (8, 16, 32):
+            gy, gx = np.mgrid[0:h // s, 0:w // s]
+            parts.append(np.stack(
+                [gx.ravel(), gy.ravel(), np.full(gx.size, s)], axis=1))
+        _grid_cache[key] = np.concatenate(parts).astype(np.float32)
+    return _grid_cache[key]
 
 
 def det_decode(out, w, h, score_thr):
     """out: (num_grids, 6) = [x, y, w, h, obj, cls] with num_class=1.
-    Returns boxes in the WxH network space."""
-    strides = [8, 16, 32]
-    grids = []
-    for s in strides:
-        for g1 in range(h // s):
-            for g0 in range(w // s):
-                grids.append((g0, g1, s))
-    assert len(grids) == out.shape[0], (len(grids), out.shape[0])
-    dets = []
-    for idx, (g0, g1, s) in enumerate(grids):
-        prob = float(out[idx, 4] * out[idx, 5])
-        if prob <= score_thr:
-            continue
-        cx = (out[idx, 0] + g0) * s
-        cy = (out[idx, 1] + g1) * s
-        bw = np.exp(out[idx, 2]) * s
-        bh = np.exp(out[idx, 3]) * s
-        dets.append({"prob": prob,
-                     "x1": cx - bw / 2, "y1": cy - bh / 2,
-                     "x2": cx + bw / 2, "y2": cy + bh / 2})
-    return dets
+    Returns boxes in the WxH network space. Vectorized: the per-cell python
+    loop cost ~60 ms/pass, which dominates once inference itself is ~30 ms."""
+    grids = det_grids(w, h)
+    assert grids.shape[0] == out.shape[0], (grids.shape[0], out.shape[0])
+    prob = out[:, 4] * out[:, 5]
+    keep = prob > score_thr
+    if not keep.any():
+        return []
+    o, g, p = out[keep], grids[keep], prob[keep]
+    cx = (o[:, 0] + g[:, 0]) * g[:, 2]
+    cy = (o[:, 1] + g[:, 1]) * g[:, 2]
+    bw = np.exp(o[:, 2]) * g[:, 2]
+    bh = np.exp(o[:, 3]) * g[:, 2]
+    return [{"prob": float(p[i]),
+             "x1": float(cx[i] - bw[i] / 2), "y1": float(cy[i] - bh[i] / 2),
+             "x2": float(cx[i] + bw[i] / 2), "y2": float(cy[i] + bh[i] / 2)}
+            for i in range(len(p))]
 
 
 def comlops_load_params(param_path):
