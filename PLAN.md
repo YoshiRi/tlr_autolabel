@@ -26,19 +26,16 @@
 
 ## 📋 残タスク(実行順)
 
-### 1. 2セッション統合の残件(旧「統合整理」— 大半は自然消化済み)
-`run_gpu.sh`+preset+engine の組合せは本番再ラベルで実証済み。残るのは掃除:
-- [ ] README の重複整理(「GPU (recommended)」節と detector model matrix の統合)
-- [ ] レガシー単体スクリプト(`tlr_detector_onnx.py` / `tlr_lamp_recognizer_onnx.py`)の扱い決定
-      (案: `debug/` へ移動 or docstring に位置づけ明記のみ)
-- [ ] ディレクトリ物理整理の要否判断(現状フラット。core/exporters/enrich 分割するか)
-- 完了条件: README が一本化され、全スクリプトの位置づけが README から一意に分かる
+### 1. [done 2026-07-19] 2セッション統合の残件
+- [x] README: GPU venv 節に model matrix への参照注記で整合(YOLOX=int8 engine / CoMLOps=onnxruntime-gpu)
+- [x] レガシー単体スクリプト: docstring に位置づけ明記(`tlr_detector_onnx.py`=DEBUG standalone、
+      `tlr_lamp_recognizer_onnx.py`=共有デコードモジュール+デバッグCLI)
+- [x] ディレクトリ物理整理: 当面フラット維持と判断(10 py + configs/ + docs/。層の対応は README の
+      Architecture 表が担う。分割はファイル数がさらに増えた時に再検討)
 
-### 2. ラベル成果物の恒久化(小、すぐ終わる)
-- [ ] scratchpad(セッション終了で消える)にある評価成果物の退避:
-      tiles/no-tiles 比較 JSON 群、COCO/CVAT エクスポート、AWML 派生データセット
-      (案: dataset の `build/` 配下 or 専用成果物ディレクトリ)
-- 完了条件: セッション非依存の場所に置かれ、場所がここに記録されている
+### 2. [done 2026-07-19] ラベル成果物の恒久化
+- [x] dataset の `build/tlr_autolabel_eval_20260718/` へ退避(full_tiles / full_notiles /
+      exports(COCO+CVAT) + 来歴README.txt)。AWML派生は `build/awml_derived/`
 
 ### 2.5 CVAT レビューラウンド1 → autolabel 評価(進行中 — Claude 側トラックで追跡)
 - [ ] レビュー用CVATタスクzip生成(3カメラ、v2属性の自動アノテーション同梱)→ CVATへインポート
@@ -65,7 +62,7 @@
 ### 6. [backlog] 高速化の続き(現状 0.78s/frame で実用十分。必要になったら)
 - [ ] フレーム間パイプライン化(JPEG デコード/前処理と GPU の重なり)→ ~0.3s/frame 見込み
 - [ ] タイルのバッチ推論(エンジンを batch=5 でリビルド)
-- [ ] 等倍タイルの no-op resize スキップ
+- [x] 等倍タイルの no-op resize スキップ(2026-07-19: 効果は誤差レベルだった — 前処理コストの主因は canvas 生成+float変換)
 
 ## 運用メモ
 

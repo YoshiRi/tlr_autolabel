@@ -13,7 +13,7 @@ each layer's output contract is one of the three annotation tiers below.
 |-------|------|-----------------|----------------|
 | **L1 inference** | detect + classify signals on an image directory | images -> per-frame `tlr_autolabel/v1` JSON (+ optional `--viz` PNG) | `tlr_autolabel.py` (this dir) |
 | **L2 dataset export** | run L1 over a T4 dataset and convert to review/training formats | Tier A JSONs -> COCO / CVAT views | `export_labels.py` (this dir); AWML's training-input spec still to be confirmed |
-| **L3 map enrichment** | attach map context per detection: lanelet2 traffic_light way + regulatory element, via ego pose + calibration; then multi-camera / multi-head fusion into RE time series | Tier A + T4 map/annotation -> Tier B (`traffic_signal_2d/v1` sidecar) -> `traffic_signal_re/v1` | `match_traffic_lights.py`, `aggregate_regulatory_signals.py`, `render_re_timeline.py` (this repo, since 2026-07-19) |
+| **L3 map enrichment** | attach map context per detection: lanelet2 traffic_light way + regulatory element, via ego pose + calibration; then multi-camera / multi-head fusion into RE time series | Tier A + T4 map/annotation -> Tier B (`traffic_signal_2d/v2` sidecar) -> `traffic_signal_re/v1` | `match_traffic_lights.py`, `aggregate_regulatory_signals.py`, `render_re_timeline.py` (this repo, since 2026-07-19) |
 | **L4 annotation conversion** | convert T4 annotations to external tool formats (CVAT / deepen) and back | Tier B <-> Tier C | CVAT pair in this repo (`export_cvat_signal_task.py` / `import_cvat_signal_annotations.py`; contract `docs/cvat_interop.md`, since 2026-07-19); deepen: other repos, vocab table only |
 | **L5 ros2 verification** (option) | feed the same images through actual ROS 2 nodes and compare against L1 results | images -> live pipeline output | `ros2_pipeline/` (quarantined until verified; acceptance = parity with the launched Autoware pipeline, i.e. the int8 engine results) |
 
@@ -396,10 +396,12 @@ python3 render_re_timeline.py --dataset-root <dataset>
 The lanelet2 `light_bulbs` color tags use `yellow`; canonical `amber` is
 translated only at the map-comparison boundary (`state_tokens.bulb_color`).
 
-### Tier B schema: `traffic_signal_2d/v1` (per-detection sidecar)
+### Tier B schema: `traffic_signal_2d/v2` (per-detection sidecar)
 
 Written by `match_traffic_lights.py` to `annotation/traffic_signal_2d_ann.json`.
-This is the IF that L4 (CVAT/deepen converters, owned elsewhere) consumes.
+This is the IF the L4 converters consume; the **attribute-level contract
+(types, defaults, edit rules) lives in `docs/cvat_interop.md`** — the summary
+below is for orientation. v1 read-fallback: `detector_signal` -> `raw_state`.
 
 ```jsonc
 {
@@ -416,11 +418,15 @@ This is the IF that L4 (CVAT/deepen converters, owned elsewhere) consumes.
       "box2d": [x0, y0, x1, y1],           // float px, original image
       "occluded": false, "z_order": 0,
       "attributes": {
-        "state": "green-arrow-up,red-circle",  // canonical vocab (see state spec)
-        "detector_signal": "...",              // raw detector state (diagnostic)
+        "state": "green-arrow-up,red-circle",  // canonical vocab, normalized
+        "signal_kind": "vehicle",              // vehicle | pedestrian | unknown
+        "visibility": "unknown",               // review field
+        "review_status": "unchecked",          // unchecked | accepted | fixed | rejected
         "map_traffic_light_id": "1234",        // lanelet2 way id, "" if unmatched
         "regulatory_element_id": "10302,10304",// comma-joined relation ids, "" if none
-        "source_type": "auto"
+        "raw_state": "...",                    // detector state as emitted by L1
+        "detector_score": "0.93",              // string; "" when absent
+        "source_type": "auto"                  // auto | cvat (manual round-trip)
       }
     }
   ]

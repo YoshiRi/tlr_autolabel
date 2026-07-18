@@ -173,6 +173,7 @@ def main():
         groups = []
         for a in anns:
             elements = parse_state(a["attributes"].get("state")
+                                   or a["attributes"].get("raw_state")
                                    or a["attributes"].get("detector_signal", ""))
             groups.append((elements_key(elements), elements, bulb_weight(elements, bulbs)))
         winner_key, winner_elements, votes, confidence, flags = vote(groups)
