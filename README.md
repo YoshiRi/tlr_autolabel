@@ -396,6 +396,89 @@ python3 render_re_timeline.py --dataset-root <dataset>
 The lanelet2 `light_bulbs` color tags use `yellow`; canonical `amber` is
 translated only at the map-comparison boundary (`state_tokens.bulb_color`).
 
+### Tier B schema: `traffic_signal_2d/v1` (per-detection sidecar)
+
+Written by `match_traffic_lights.py` to `annotation/traffic_signal_2d_ann.json`.
+This is the IF that L4 (CVAT/deepen converters, owned elsewhere) consumes.
+
+```jsonc
+{
+  "schema_version": "traffic_signal_2d/v1",
+  "source": "map_projection_auto",        // or "manual" etc. for other producers
+  "annotations": [
+    {
+      "token": "<md5(sample_data_token, det index, box)>",  // deterministic
+      "sample_token": "...", "sample_data_token": "...",
+      "channel": "CAM_FRONT",
+      "filename": "data/CAM_FRONT/00000.jpg",
+      "timestamp": 1783325716091628,       // µs, from sample_data
+      "label": "traffic_light",
+      "box2d": [x0, y0, x1, y1],           // float px, original image
+      "occluded": false, "z_order": 0,
+      "attributes": {
+        "state": "green-arrow-up,red-circle",  // canonical vocab (see state spec)
+        "detector_signal": "...",              // raw detector state (diagnostic)
+        "map_traffic_light_id": "1234",        // lanelet2 way id, "" if unmatched
+        "regulatory_element_id": "10302,10304",// comma-joined relation ids, "" if none
+        "source_type": "auto"
+      }
+    }
+  ]
+}
+```
+
+Sidecar companion: `build/tl_match/match_report.json` (`params`, `stats`,
+per-frame `frames` diagnostics — projected candidates, IoU, distances).
+
+### `traffic_signal_re/v1` (regulatory-element time series)
+
+Written by `aggregate_regulatory_signals.py` to
+`annotation/traffic_signal_re_timeseries.json`:
+
+```jsonc
+{
+  "schema_version": "traffic_signal_re/v1",
+  "source": "annotation/traffic_signal_2d_ann.json",
+  "series": [
+    {
+      "regulatory_element_id": "10302",
+      "member_ways": ["1234", "1235"],     // lanelet2 traffic_light ways (role=refers)
+      "n_observations": 42,
+      "segments": [                         // run-length view of the state sequence
+        {"state": "red-circle", "t_start": ..., "t_end": ..., "n_frames": 3}
+      ],
+      "observations": [                     // one per sample where any head was seen
+        {
+          "sample_token": "...", "timestamp": ...,
+          "state": "green-arrow-up,red-circle",   // canonical vocab, "unknown" allowed
+          "elements": [{"color": "...", "shape": "...", "arrow": "...|null"}],
+          "head_states": {"1234": "red-circle"},  // per-way fused state
+          "n_heads": 2,
+          "confidence": 0.87,               // winner weight / total vote weight
+          "flags": ["cross_head_state_disagreement"]
+        }
+      ]
+    }
+  ]
+}
+```
+
+Flag vocabulary (review triage; also summarized in
+`build/tl_match/re_verification_report.json`):
+
+| flag | meaning |
+|---|---|
+| `cross_camera_state_disagreement` | cameras disagree on one head's state |
+| `cross_head_state_disagreement` | heads of one regulatory element disagree |
+| `partial_unknown` | some sources voted unknown |
+| `single_frame_flip` | state differs from identical neighbors (1-frame glitch) |
+| `color_not_in_map_bulbs:<c>` / `arrow_without_map_bulb:<d>` / `arrow_dir_mismatch:<d>(map:<dirs>)` | detected state impossible for the map's bulb layout |
+| `ped_on_vehicle_bulbs` | pedestrian lamp matched to a vehicle head |
+| `no_bulb_info_in_map` | map has no light_bulbs entry to validate against |
+
+Fusion weighting: each vote is scaled by `0.25^n_bulb_flags` (map-infeasible
+states count less) and, at RE level, by the head's own fused confidence.
+
 ## Preprocessing (must match the Autoware nodes exactly)
 
 Verified against the C++ nodes; these details are load-bearing for correctness:
