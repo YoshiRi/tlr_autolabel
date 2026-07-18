@@ -67,6 +67,34 @@ A detector must be chosen explicitly (`--preset` or `--detector`); explicit CLI
 flags always override preset values (`--no-tiles` cancels a preset's
 `tiles: true`). testM exists as a model directory but is empty — no preset.
 
+### Trying a new model (試走)
+
+L1 doubles as a model test bench. A bare `--detector <path>` run uses the
+plain single-pass configuration (tiles OFF by default — tiles are opt-in via
+presets or `--tiles`), so a quick eyeball run is:
+
+```bash
+python3 tlr_autolabel.py <a_few_images> --detector new_model.onnx --viz --out-dir ./try
+```
+
+Flexibility contract (what happens when model specs change):
+
+- **Input size** is read from the model (static NCHW required; dynamic dims
+  exit with a clear message rather than misbehaving).
+- **yolox head**: `num_class` is taken from the output shape (`4+1+C`);
+  multi-class variants score as obj × best class. A wrong grid count (input
+  size / stride mismatch) raises with a diagnostic instead of decoding garbage.
+- **Family detection** is by output signature (1 output = yolox head, 3 =
+  CoMLOps darknet); anything else exits telling you to add a decode — extend
+  `Detector.__init__/detect` for new families.
+- **Presets** may use `$ENV_VARS` and `~` in paths; a missing model path fails
+  fast, naming the preset it came from.
+- Per-model decode constants never live in code: yolox needs none, CoMLOps
+  reads `comlops_large_detector_ml.param.yaml` (`--comlops-param`).
+- The **classifier** is swappable the same way (`--classifier` /
+  `--classifier-param`); a different classifier architecture needs its decode
+  added alongside the LampRecognizer one.
+
 ## AWML training input (investigated 2026-07-18)
 
 AWML (tier4/AWML) trains both TLR models — YOLOX_opt fine detector and

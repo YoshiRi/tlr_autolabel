@@ -98,12 +98,23 @@ def det_grids(w, h):
 
 
 def det_decode(out, w, h, score_thr):
-    """out: (num_grids, 6) = [x, y, w, h, obj, cls] with num_class=1.
+    """out: (num_grids, 4 box + 1 obj + num_class) yolox head output.
+    num_class is taken from the tensor shape (the TL detectors ship with 1
+    class; a multi-class variant scores as obj * best-class, like the node).
     Returns boxes in the WxH network space. Vectorized: the per-cell python
     loop cost ~60 ms/pass, which dominates once inference itself is ~30 ms."""
+    if out.ndim != 2 or out.shape[1] < 6:
+        raise ValueError(
+            f"unexpected yolox output shape {out.shape}; expected "
+            "(num_grids, 4+1+num_class). If this is a new model family, "
+            "extend Detector/det_decode instead of forcing it through here.")
     grids = det_grids(w, h)
-    assert grids.shape[0] == out.shape[0], (grids.shape[0], out.shape[0])
-    prob = out[:, 4] * out[:, 5]
+    if grids.shape[0] != out.shape[0]:
+        raise ValueError(
+            f"grid count {grids.shape[0]} (strides 8/16/32 at {w}x{h}) does not "
+            f"match output rows {out.shape[0]} — input size or stride set of "
+            "this model differs from the tensorrt_yolox convention.")
+    prob = out[:, 4] * out[:, 5:].max(axis=1)
     keep = prob > score_thr
     if not keep.any():
         return []
@@ -215,9 +226,24 @@ class Detector:
             return
         self.sess = make_session(model_path)
         self.in_name = self.sess.get_inputs()[0].name
-        _, _, self.h, self.w = [d if isinstance(d, int) else 0
-                                for d in self.sess.get_inputs()[0].shape]
-        self.kind = "yolox" if len(self.sess.get_outputs()) == 1 else "comlops"
+        in_shape = self.sess.get_inputs()[0].shape
+        if len(in_shape) != 4 or not all(isinstance(d, int) and d > 0 for d in in_shape[2:]):
+            raise SystemExit(
+                f"detector input shape {in_shape} is not a static NCHW image — "
+                "dynamic-dim ONNX exports are not supported; re-export with a "
+                "fixed input size or extend Detector.")
+        _, _, self.h, self.w = in_shape
+        n_out = len(self.sess.get_outputs())
+        if n_out == 1:
+            self.kind = "yolox"
+        elif n_out == 3:
+            self.kind = "comlops"
+        else:
+            raise SystemExit(
+                f"unrecognized detector family: {n_out} outputs "
+                f"({[o.name for o in self.sess.get_outputs()]}). Known: 1 output "
+                "= yolox head, 3 outputs = CoMLOps darknet. New model families "
+                "need a decode added to Detector.")
         if self.kind == "comlops":
             self.mp = comlops_load_params(comlops_param_path)
             self.keep_ids = set()
@@ -415,6 +441,9 @@ def apply_preset(ap, args):
         dest = key.replace("-", "_")
         if dest not in defaults:
             raise SystemExit(f"preset {args.preset}: unknown key {key!r}")
+        if isinstance(val, str):
+            # allow $VARS and ~ in preset paths so presets survive machine moves
+            val = os.path.expanduser(os.path.expandvars(val))
         if getattr(args, dest) == defaults[dest]:
             setattr(args, dest, val)
 
@@ -476,6 +505,9 @@ def main():
     if not args.detector:
         raise SystemExit("choose a detector: --preset <name> "
                          f"(available: {', '.join(list_presets())}) or --detector <model path>")
+    if not os.path.exists(args.detector):
+        raise SystemExit(f"detector model not found: {args.detector}"
+                         + (f" (from preset {args.preset})" if args.preset else ""))
 
     detector = Detector(args.detector, args.comlops_param)
     if detector.kind == "comlops":
