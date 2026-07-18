@@ -20,6 +20,12 @@
   `yolox-1920-int8`+tiles+GPU classifier で v1 再生成し設置(旧 fp32 ラベルは
   `build/tlr_autolabel_fp32_backup_20260719/`)。`match_traffic_lights.py` に v1
   対応パッチ(state キー優先、旧形式フォールバック)
+- **L3取り込み完了(2026-07-19)**: dataset 側の3工程(`match_traffic_lights.py` 地図付与 /
+  `aggregate_regulatory_signals.py` 複数カメラ・複数ヘッド融合 / `render_re_timeline.py` 可視化)を
+  当リポジトリへ移植。IF修整: v1 は sample_data_token でフレーム解決(ファイル名規約から解放)、
+  トークンパーサを `state_tokens.py` に共通化(正準+旧形式両対応、amber→yellow は地図比較境界のみ)。
+  リグレッション一致(978/758)、RE融合 461 観測・7ヘッドグループ。
+  dataset 側 `tools/` に残るのは CVAT 往復ペア(L4)のみ
 - **タスク3完了(2026-07-19)**: Tier B(`traffic_signal_2d_ann.json`)を再生成。
   品質比較 — 旧 fp32: 2017 anns / 地図マッチ 12.9% / unknown 81%(粗い語彙)
   → 新 int8+tiles: **978 anns / 地図マッチ 77.5% / unknown 29%**、正準トークン
