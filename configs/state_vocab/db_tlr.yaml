@@ -1,0 +1,58 @@
+# Canonical -> db_tlr (AWML) state vocabulary mapping.
+# Single source of truth for every exporter that emits db_tlr names.
+#
+# db_tlr stores the signal state as the per-box *category name* (verified in
+# tier4/AWML autoware_ml/configs/detection2d/dataset/t4dataset/tlr_finedetector.py,
+# 2026-07-18). Only names in `allowed` may be emitted: AWML's class_mappings
+# raises on unmapped names. Anything unrepresentable falls back to `unknown`.
+#
+# Construction rule implemented by the adapter (underscore = current style):
+#   vehicle: {circle color} then arrows, joined by "_": red_straight_left
+#            colors: red|yellow|green (canonical amber -> yellow)
+#            arrow order: straight, left, right, leftdiagonal, rightdiagonal
+#   pedestrian (shape=ped): crosswalk_{red|green}, else crosswalk_unknown
+#   no lamps / unrepresentable: unknown
+color_names:
+  red: red
+  amber: yellow
+  green: green
+arrow_names:            # canonical 8-way direction -> db_tlr arrow word
+  up: straight
+  left: left
+  right: right
+  up_left: leftdiagonal
+  up_right: rightdiagonal
+  # down / down_left / down_right: no db_tlr equivalent -> fallback unknown
+arrow_order: [straight, left, right, leftdiagonal, rightdiagonal]
+allowed:                # the exact db_tlr category vocabulary (32 entries)
+  - green
+  - left-red
+  - left-red-straight
+  - red
+  - red-right
+  - red-straight
+  - yellow
+  - red-rightdiagonal
+  - right-yellow
+  - red-right-straight
+  - leftdiagonal-red
+  - unknown
+  - red_right
+  - red_left
+  - red_straight_left
+  - red_straight
+  - crosswalk_red
+  - crosswalk_green
+  - crosswalk_unknown
+  - green_straight
+  - green_left
+  - green_right
+  - yellow_straight
+  - yellow_left
+  - yellow_right
+  - yellow_straight_left
+  - yellow_straight_right
+  - yellow_straight_left_right
+  - red_straight_right
+  - red_straight_left_right
+  - red_leftdiagonal

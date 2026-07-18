@@ -1,0 +1,23 @@
+# Decode params for CoMLOps-Large-Detection-Model-v1.0.1.onnx (darknet-converted,
+# 3 output scales, 5 anchors x [tx,ty,tw,th,obj,10cls] per scale, all sigmoid).
+# No official param file was found for this model; the anchors below were fitted
+# empirically over 60 frames x 6 cameras of the T4 annotation dataset by
+# projecting the 3D GT boxes into the images and solving pw = w_gt/(2*sig(tw))^2
+# at GT-center cells (fit_anchors.py, session 2026-07-17; medians, IQR within
+# ~10%). Decode: cx=(gx+tx)*stride (scale_x_y=1), bw=pw*(2*tw)^2.
+# Preprocess: letterbox pad-114, RGB, /255 (unlike YOLOX's raw BGR).
+# stride-32 anchors 3/4 had no GT coverage (objects that large never appeared);
+# they are extrapolated guesses -- irrelevant for traffic lights, which land on
+# stride 8/16.
+/**:
+  ros__parameters:
+    model_params:
+      num_anchors: 5
+      chans_per_anchor: 15
+      num_classes: 10
+      strides: [8, 16, 32]
+      labels: [UNKNOWN, CAR, TRUCK, BUS, BICYCLE, MOTORBIKE, PEDESTRIAN, ROADPAINT, TRAFFIC_LIGHT, TRAFFIC_SIGN]
+      anchors:
+        - [11.0, 11.9, 37.0, 12.5, 14.9, 28.8, 43.4, 38.3, 32.4, 67.9]
+        - [112.1, 28.9, 90.7, 71.2, 58.1, 153.8, 252.2, 83.3, 155.6, 147.6]
+        - [143.3, 340.2, 327.4, 223.4, 482.1, 491.7, 700.0, 300.0, 800.0, 700.0]

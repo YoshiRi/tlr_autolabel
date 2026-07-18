@@ -1,0 +1,4 @@
+# testS: YOLOX-sPlus traffic_light 960x960, int8 TensorRT engine.
+# tiles off by default here: 960-net tiles over 2880x1860 mean 7 passes/frame;
+# enable with --tiles when recall matters more than speed.
+detector: /home/yoshiri/autoware_data/traffic_light_detector_testS/yolox-sPlus-opt-Co_MLOps-traffic_light-960x960_20260629_best.engine

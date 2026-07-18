@@ -1,0 +1,3 @@
+# TLRtest: YOLOX-sPlus traffic_light 1280x1280, int8 TensorRT engine.
+detector: /home/yoshiri/autoware_data/TLRtest/traffic_light_detector/yolox-sPlus-opt-Co_MLOps-traffic_light-1280x1280_20260703_best.engine
+tiles: true
