@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""TLR YOLOX detector inference via onnxruntime (recovered from session 3778405d, 2026-07-10).
+"""[DEBUG standalone] TLR YOLOX detector inference via onnxruntime.
+
+Superseded by tlr_autolabel.py (Detector class) for real runs; kept as a
+minimal single-file reference of the raw decode with hardcoded paths.
 
 Decodes the yolox-sPlus traffic_light detector ONNX output (18900x6, num_class=1:
 4 box + 1 obj + 1 class) into detections. Grid/stride decode matches the Autoware

@@ -68,7 +68,10 @@ def det_preprocess(img, w, h, rgb=False, norm=1.0):
     ih, iw = img.shape[:2]
     scale = min(w / iw, h / ih)
     nw, nh = int(iw * scale), int(ih * scale)
-    resized = cv2.resize(img, (nw, nh), interpolation=cv2.INTER_LINEAR)
+    if (nw, nh) == (iw, ih):
+        resized = img  # native-resolution tiles: skip the no-op resample
+    else:
+        resized = cv2.resize(img, (nw, nh), interpolation=cv2.INTER_LINEAR)
     if rgb:
         resized = resized[:, :, ::-1]
     canvas = np.full((h, w, 3), 114, dtype=np.uint8)

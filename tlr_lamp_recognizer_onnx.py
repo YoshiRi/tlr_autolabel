@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""TLR YOLOX-based classifier (CnnLampRecognizer) inference via onnxruntime.
+"""[DEBUG standalone + shared decode module] TLR YOLOX-based classifier (CnnLampRecognizer).
+
+tlr_autolabel.py imports the decode/preprocess from here (this file is the
+canonical LampRecognizer decode); the __main__ CLI is a single-crop debug tool.
 
 Faithfully reproduces the decode of Autoware's `autoware_traffic_light_classifier`
 node, classifier_type=2 (LampRecognizer):
