@@ -1,0 +1,39 @@
+# Canonical -> deepen (Tier C) state vocabulary mapping — CONTRACT TABLE ONLY.
+# The deepen converter lives in another repo; this file is the vocabulary
+# contract it must consume so labels stay diffable with ours.
+#
+# Basis / assumption (confirm with the converter repo — see PLAN.md 残タスク):
+# the db_tlr_v1..v7 T4 datasets were produced through deepen annotation, so the
+# deepen label set is taken as db_tlr-compatible (state as the per-box label,
+# underscore construction). Where deepen supports box attributes, the canonical
+# state string travels alongside so no information is lost in the projection.
+#
+# label (state-as-category) construction — identical to db_tlr:
+#   vehicle: {circle color} then arrows, "_"-joined; colors red|yellow|green
+#            (canonical amber -> yellow); arrow order: straight, left, right,
+#            leftdiagonal, rightdiagonal
+#   pedestrian (shape=ped): crosswalk_{red|green}, else crosswalk_unknown
+#   no lamps / unrepresentable (incl. down/down_left/down_right): unknown
+#
+# attributes (deepen box attributes, pass-through from traffic_signal_2d/v2):
+#   state              canonical token string (source of truth)
+#   raw_state          autolabel original
+#   map_traffic_light_id / regulatory_element_id
+#   review_status      unchecked | accepted | rejected | fixed
+#
+# Reuse note: color_names / arrow_names / arrow_order / allowed are the same
+# tables as db_tlr.yaml. The converter should read db_tlr.yaml for those and
+# this file only for the deepen-specific attribute passthrough, unless the
+# converter repo reports a diverging deepen label set — then list it here.
+extends: db_tlr.yaml
+attributes_passthrough:
+  - state
+  - raw_state
+  - map_traffic_light_id
+  - regulatory_element_id
+  - review_status
+open_questions:
+  - deepen project label set to be confirmed against the converter repo
+    (assumed db_tlr-compatible; update `extends` to an explicit list if not)
+  - whether deepen attributes support select vocabularies (review_status) or
+    free text only

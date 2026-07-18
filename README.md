@@ -14,7 +14,7 @@ each layer's output contract is one of the three annotation tiers below.
 | **L1 inference** | detect + classify signals on an image directory | images -> per-frame `tlr_autolabel/v1` JSON (+ optional `--viz` PNG) | `tlr_autolabel.py` (this dir) |
 | **L2 dataset export** | run L1 over a T4 dataset and convert to review/training formats | Tier A JSONs -> COCO / CVAT views | `export_labels.py` (this dir); AWML's training-input spec still to be confirmed |
 | **L3 map enrichment** | attach map context per detection: lanelet2 traffic_light way + regulatory element, via ego pose + calibration; then multi-camera / multi-head fusion into RE time series | Tier A + T4 map/annotation -> Tier B (`traffic_signal_2d/v1` sidecar) -> `traffic_signal_re/v1` | `match_traffic_lights.py`, `aggregate_regulatory_signals.py`, `render_re_timeline.py` (this repo, since 2026-07-19) |
-| **L4 annotation conversion** | convert T4 annotations to external tool formats (CVAT / deepen) and back | Tier B <-> Tier C | other repos; contract only |
+| **L4 annotation conversion** | convert T4 annotations to external tool formats (CVAT / deepen) and back | Tier B <-> Tier C | CVAT pair in this repo (`export_cvat_signal_task.py` / `import_cvat_signal_annotations.py`; contract `docs/cvat_interop.md`, since 2026-07-19); deepen: other repos, vocab table only |
 | **L5 ros2 verification** (option) | feed the same images through actual ROS 2 nodes and compare against L1 results | images -> live pipeline output | `ros2_pipeline/` (quarantined until verified; acceptance = parity with the launched Autoware pipeline, i.e. the int8 engine results) |
 
 Design rules that keep the layers clean:
@@ -34,8 +34,8 @@ Design rules that keep the layers clean:
 | tier | spec | scope | consumers |
 |------|------|-------|-----------|
 | **A** | `tlr_autolabel/v1` (frozen 2026-07-18, schema below) | raw autolabel per frame; model/dataset-agnostic; full lamp detail + provenance | L2/L3, quality review |
-| **B** | `traffic_signal_2d/v1` (T4 sidecar table) | dataset-scoped: per-signal `state`, `map_traffic_light_id`, `regulatory_element_id`, source | training (AWML — verify), L4, RE-level aggregation |
-| **C** | CVAT XML / deepen | external annotation tools, human correction rounds | annotators; contracts owned by the converter repos |
+| **B** | `traffic_signal_2d/v2` (T4 sidecar table; v1 read-fallback: `detector_signal` -> `raw_state`) | dataset-scoped: per-signal canonical `state`, `map_traffic_light_id`, `regulatory_element_id`, review fields (`review_status`, `signal_kind`, `visibility`), provenance (`raw_state`, `detector_score`, `source_type`) — attribute contract in `docs/cvat_interop.md` | training (AWML — verify), L4, RE-level aggregation |
+| **C** | CVAT XML / deepen | external annotation tools, human correction rounds | annotators; CVAT contract `docs/cvat_interop.md`, deepen owned by converter repo |
 
 Rules across tiers: the **canonical state vocabulary (lamp tokens
 `{color}-{shape}[-{direction}]`, sorted, comma-joined — see the state spec

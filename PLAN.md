@@ -22,6 +22,7 @@
 | 07-19 | **L3 3工程をリポジトリへ移植**: `match_traffic_lights.py` / `aggregate_regulatory_signals.py` / `render_re_timeline.py` + 共通パーサ `state_tokens.py`。IF修整(sample_data_token でフレーム解決、正準+旧形式両対応、amber↔yellow は地図比較境界のみ)。リグレッション一致(978/758)。dataset 側 `tools/` に残るは CVAT 往復ペア(L4)のみ |
 | 07-19 | **8倍高速化**: 非連続配列 tofile(399ms/パス)修正 + yolox デコードのベクトル化。6.4s → 0.78s/frame(出力ビット一致) |
 | 07-19 | L1 の新モデル試走対応: 多クラス yolox 一般化、動的shape/未知ファミリの明示エラー、プリセット env var 展開、README に flexibility contract(tiles はオプトイン) |
+| 07-19 | **L4 CVAT往復を当リポジトリへ移植 + 契約v2**: 属性契約 `docs/cvat_interop.md`(`traffic_signal_2d/v2`: 正準state text + signal_kind/visibility/review_status + raw_state/detector_score。circle/arrow select分解は不採用=同時多方向矢印・二重管理回避)。importはfail-loud検証(stateトークン文法・way id実在・RE id再導出)。往復ロスレス(CAM_FRONT 299/299)、aggregator v2回帰OK。dataset側の旧ペア・旧specはMOVED注記済み(削除可) |
 
 ## 📋 残タスク(実行順)
 
@@ -39,6 +40,13 @@
       (案: dataset の `build/` 配下 or 専用成果物ディレクトリ)
 - 完了条件: セッション非依存の場所に置かれ、場所がここに記録されている
 
+### 2.5 CVAT レビューラウンド1 → autolabel 評価(進行中 — Claude 側トラックで追跡)
+- [ ] レビュー用CVATタスクzip生成(3カメラ、v2属性の自動アノテーション同梱)→ CVATへインポート
+- [ ] 人手レビュー(state修正 / map id正誤 / review_status付与。RE検証レポートのフラグを優先順位付けに使用)
+- [ ] `import_cvat_signal_annotations.py` で取り込み(検証+正規化)
+- [ ] 評価: `review_status∈{accepted,fixed}` をGT、`raw_state` を予測として検出/状態/地図IDの一致を集計
+- 完了条件: レビュー済みTier Bと評価レポートが dataset `build/` に存在
+
 ### 3. [hold] AWML 結合テスト(ユーザー指示により保留中)
 - [ ] AWML checkout 上で `create_data_t4dataset.py` を派生データセットに対して実行
 - [ ] `mask: null` / `instance_token: null` の t4dev-kit 受容確認
@@ -51,7 +59,7 @@
   合格まで L1-L4 の依存グラフに入れない
 
 ### 5. [外部依存] 小粒
-- [ ] deepen 形式対応表(Tier C、変換ロジックは他リポジトリ管理)
+- [x] deepen 形式対応表(2026-07-19: `configs/state_vocab/deepen.yaml` — db_tlr互換を仮定した契約表+v2属性パススルー。ラベルセットの実確認は変換リポジトリ側とのすり合わせ待ち)
 - [ ] testM ディレクトリが空(モデル配置待ち → 配置されたらプリセット追加)
 
 ### 6. [backlog] 高速化の続き(現状 0.78s/frame で実用十分。必要になったら)

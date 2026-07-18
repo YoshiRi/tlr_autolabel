@@ -29,6 +29,8 @@ from xml.etree import ElementTree as ET
 import numpy as np
 from scipy.optimize import linear_sum_assignment
 
+from state_tokens import elements_key, parse_state
+
 
 # ---------------------------------------------------------------- lanelet2 map
 
@@ -229,24 +231,21 @@ def match_boxes(detections, candidates, gate_factor=1.5, min_iou=0.05, unmatch_c
 # ---------------------------------------------------------------- state labels
 
 
-def lamps_to_state(signal_entry) -> str:
-    # tlr_autolabel/v1 carries the canonical state (lamp tokens sorted, e.g.
-    # "green-arrow-up,red-circle"); prefer it. The derivation below remains as
-    # a fallback for pre-v1 payloads.
-    state = signal_entry.get("state")
-    if state:
-        return state
-    lamps = signal_entry.get("lamps") or []
-    if not lamps:
-        return "unknown"
-    colors = {l.get("color") for l in lamps}
-    arrows = [l for l in lamps if l.get("shape") == "arrow"]
-    if arrows:
-        return f"{arrows[0].get('color', 'green')}_arrow"
-    for color in ("red", "yellow", "green"):
-        if color in colors:
-            return color
-    return "unknown"
+def raw_state(signal_entry) -> str:
+    """Detector state string as written by L1 (v1 `state`, pre-v1 `signal`)."""
+    return signal_entry.get("state") or signal_entry.get("signal") or "unknown"
+
+
+def canonical_state(signal_entry) -> str:
+    """Canonical normalized state: parse (handles legacy tokens too) and
+    re-serialize sorted; 'unknown' when no lamp carries state."""
+    return elements_key(parse_state(raw_state(signal_entry))) or "unknown"
+
+
+def signal_kind(elements: list[dict]) -> str:
+    if any(e["shape"] == "ped" for e in elements):
+        return "pedestrian"
+    return "vehicle" if elements else "unknown"
 
 
 # ------------------------------------------------------------------------ main
@@ -296,7 +295,7 @@ def draw_overlay(root, frame, detections, candidates, matches, out_path):
         box = det["box_xyxy"]
         color = (0, 220, 0) if i in matches else (255, 60, 60)
         draw.rectangle(list(box), outline=color, width=3)
-        label = det.get("signal", "")
+        label = raw_state(det)
         if i in matches:
             label += f" -> {candidates[matches[i]]['way_id']}"
             draw.line(
@@ -412,10 +411,15 @@ def main():
                     "occluded": False,
                     "z_order": 0,
                     "attributes": {
-                        "state": lamps_to_state(det),
-                        "detector_signal": det.get("state") or det.get("signal", ""),
+                        "state": canonical_state(det),
+                        "signal_kind": signal_kind(parse_state(raw_state(det))),
+                        "visibility": "unknown",
+                        "review_status": "unchecked",
                         "map_traffic_light_id": cand["way_id"] if cand else "",
                         "regulatory_element_id": ",".join(reg_ids),
+                        "raw_state": raw_state(det),
+                        "detector_score": ("" if det.get("detector_score") is None
+                                           else f"{det['detector_score']}"),
                         "source_type": "auto",
                     },
                 }
@@ -424,7 +428,7 @@ def main():
                 {
                     "detection_box": det["box_xyxy"],
                     "detector_score": det.get("detector_score"),
-                    "signal": det.get("state") or det.get("signal", ""),
+                    "signal": raw_state(det),
                     "map_traffic_light_id": cand["way_id"] if cand else None,
                     "map_subtype": cand["subtype"] if cand else None,
                     "regulatory_element_ids": reg_ids,
@@ -446,7 +450,7 @@ def main():
         out_path = root / (args.output or Path("annotation/traffic_signal_2d_ann.json"))
         out_path.parent.mkdir(parents=True, exist_ok=True)
         out_path.write_text(json.dumps(
-            {"schema_version": "traffic_signal_2d/v1", "source": "map_projection_auto",
+            {"schema_version": "traffic_signal_2d/v2", "source": "map_projection_auto",
              "annotations": annotations}, indent=2))
         print(f"wrote {out_path}")
     if args.report or not args.frames:
