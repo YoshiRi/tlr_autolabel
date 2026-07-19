@@ -78,10 +78,10 @@
 # 1. Tier B生成(match_traffic_lights.py が v2 属性で出力)
 python3 match_traffic_lights.py --dataset-root <dataset>
 #    (RE検証レポートも: aggregate_regulatory_signals.py --dataset-root <dataset>)
-# 2. CVATタスクzip生成。--min-priority / --worst-first で「怪しいフレームだけ・
-#    優先度降順」の集中レビュータスクにできる(下記「高速レビュー」参照)
+# 2. CVATタスクzip生成。--min-priority で「怪しいフレームだけ」の集中タスクに
+#    できる(下記「高速レビュー」参照)
 python3 export_cvat_signal_task.py --dataset-root <dataset> --camera CAM_FRONT \
-    --count 0 --min-priority 1.0 --worst-first
+    --count 0 --min-priority 1.0
 # 3. CVATへzipをタスクとしてインポート → レビュー(state修正、review_status設定)
 # 4. CVAT XMLエクスポート → 取り込み(検証+正規化)
 python3 import_cvat_signal_annotations.py exported.xml --dataset-root <dataset> \
@@ -107,10 +107,15 @@ CVAT 側の速い回し方:
   `review_status` を数字キーで `accepted`/`fixed`/`rejected` に即設定。
 - **一括**: 大半が正しければ select-all → `review_status=accepted`、間違いだけ個別。
 
-`--min-priority T` は「max box priority ≥ T」のフレームだけ、`--worst-first` は
-優先度降順に並べる。両者で「疑わしい順の集中レビュータスク」が作れる
-(c1af6a38 CAM_FRONT: 578→120フレームに縮約、先頭が最重要)。`--no-images` で
-XMLのみの軽量zip。
+`--min-priority T` は「max box priority ≥ T」のフレームだけの集中タスクにする
+(c1af6a38 CAM_FRONT: 578→120フレーム)。`--no-images` で XMLのみの軽量zip。
+
+**フレーム順は撮影時刻順(=ファイル名順)に固定**。CVAT はアップロード画像を
+名前順にフレーム 0..N と並べ、CVAT-for-images-1.1 の `<image id>` をフレーム
+番号として使うため、id は必ず名前ソート順に一致させている。優先度で物理的に
+並べ替えると id↔画像がずれて **box が別フレームに乗り**、ズレて見える(旧
+`--worst-first` はこの理由で撤去)。worst-first レビューは CVAT 側で
+`review_priority` フィルタ+ソートで行う。
 
 ## deepen(Tier C、対応表のみ)
 

@@ -235,6 +235,12 @@ def build_xml(task_name: str, rows: list[dict], signal_by_sample_data: dict[str,
     root_el = ET.Element("annotations")
     add_text(root_el, "version", "1.1")
     add_meta(root_el, task_name, len(rows))
+    # CVAT assigns frame numbers by sorting the uploaded images by name and uses
+    # the XML <image id> as the frame index. So `id` MUST equal the name-sorted
+    # position, or boxes land on the wrong frames (they appear shifted). We sort
+    # by CVAT image name here to guarantee that invariant regardless of the
+    # order `rows` arrived in.
+    rows = sorted(rows, key=cvat_image_name)
     for image_id, row in enumerate(rows):
         image_el = ET.SubElement(
             root_el,
@@ -280,9 +286,10 @@ def parse_args() -> argparse.Namespace:
                         help="RE verification report for cross-camera/temporal review priority")
     parser.add_argument("--min-priority", type=float, default=None,
                         help="keep only frames whose max box review_priority >= this "
-                             "(builds a focused suspicious-frames review task)")
-    parser.add_argument("--worst-first", action="store_true",
-                        help="order frames by descending review_priority instead of time")
+                             "(builds a focused suspicious-frames review task). "
+                             "To review worst-first inside CVAT, filter on the "
+                             "review_priority attribute — frame order stays temporal "
+                             "so the id<->image mapping CVAT needs stays correct.")
     parser.add_argument("--output", type=Path)
     parser.add_argument("--no-images", action="store_true")
     return parser.parse_args()
@@ -313,16 +320,8 @@ def main() -> None:
                     if frame_priority(r, signal_by_sample_data, re_flags) >= args.min_priority]
         if not selected:
             raise SystemExit(f"no frames with review_priority >= {args.min_priority}")
-    if args.worst_first:
-        selected = sorted(
-            selected,
-            key=lambda r: -frame_priority(r, signal_by_sample_data, re_flags))
 
-    suffix = ""
-    if args.min_priority is not None:
-        suffix += f"_p{args.min_priority:g}"
-    if args.worst_first:
-        suffix += "_worst"
+    suffix = f"_p{args.min_priority:g}" if args.min_priority is not None else ""
     task_name = f"{args.camera}_{args.start:06d}_{end - 1:06d}{suffix}"
     output = args.output or dataset_root / "build/cvat_signal" / f"{task_name}.zip"
 
@@ -332,7 +331,7 @@ def main() -> None:
     print(f"camera={args.camera} frames_in_task={len(selected)} "
           f"(from {args.start}..{end - 1}"
           + (f", min_priority={args.min_priority}" if args.min_priority is not None else "")
-          + (", worst-first" if args.worst_first else "") + ")")
+          + ")")
 
 
 if __name__ == "__main__":
