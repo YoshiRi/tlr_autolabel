@@ -1,8 +1,10 @@
 # TLR autolabeling
 
-Autolabel traffic-light recognition over camera images using the ML models
-Autoware itself can run (multiple detector variants), producing labels that are
-usable for **manual correction** (CVAT etc.) and for **evaluation**.
+Tooling to **evaluate traffic-light-recognition models and efficiently produce
+the evaluation data** for it. Autolabel over camera images with the ML models
+Autoware can run, refine into review-ready GT via manual correction (CVAT), and
+evaluate. Training is out of scope; producing training-compatible exports
+(AWML / T4 / deepen) is kept only as a **compatibility** means, not a goal.
 
 > **Where things stand** — capabilities, goals, and maturity live in
 > [STATUS.md](STATUS.md); remaining tasks in [PLAN.md](PLAN.md). This README is
