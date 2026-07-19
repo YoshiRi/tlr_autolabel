@@ -185,6 +185,7 @@ def convert(xml_path: Path, dataset_root: Path) -> dict:
                         "review_status": attrs.get("review_status") or "unchecked",
                         "map_traffic_light_id": way_id,
                         "regulatory_element_id": ",".join(regulatory_by_way.get(way_id, [])),
+                        "facing": attrs.get("facing", ""),
                         "raw_state": attrs.get("raw_state", ""),
                         "detector_score": attrs.get("detector_score", ""),
                         "source_type": attrs.get("source_type")

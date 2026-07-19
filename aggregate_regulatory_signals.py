@@ -199,7 +199,13 @@ def main():
                                    or a["attributes"].get("detector_signal", ""))
             elements, snaps = snap_arrow_dirs(elements, bulbs)
             snap_flags += snaps
-            groups.append((elements_key(elements), elements, bulb_weight(elements, bulbs)))
+            weight = bulb_weight(elements, bulbs)
+            # a colored reading through the housing's back is physically
+            # impossible -> almost certainly a misassociation; flag + demote
+            if elements and a["attributes"].get("facing") == "back":
+                snap_flags.append("colored_state_on_back_face")
+                weight *= 0.25
+            groups.append((elements_key(elements), elements, weight))
         winner_key, winner_elements, votes, confidence, flags = vote(groups)
         flags = ["cross_camera_" + f if f == "state_disagreement" else f for f in flags]
         flags += snap_flags

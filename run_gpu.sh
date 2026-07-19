@@ -5,8 +5,14 @@
 #
 # Usage: ./run_gpu.sh <image_or_dir> --out-dir ./labels [--viz] [any tlr_autolabel flag]
 set -euo pipefail
-VENV=/home/yoshiri/.venvs/tlr_onnxgpu
-NV="$VENV/lib/python3.10/site-packages/nvidia"
+# venv location is overridable; default keeps the original path.
+VENV="${TLR_GPU_VENV:-$HOME/.venvs/tlr_onnxgpu}"
+if [ ! -x "$VENV/bin/python" ]; then
+  echo "onnxruntime-gpu venv not found at $VENV" >&2
+  echo "create it with: ./setup_gpu_venv.sh   (or set \$TLR_GPU_VENV)" >&2
+  exit 1
+fi
+NV="$(echo "$VENV"/lib/python*/site-packages/nvidia)"
 # make onnxruntime-gpu find libcufft/cublas/cudnn/... shipped by the nvidia wheels
 export LD_LIBRARY_PATH="$(ls -d "$NV"/*/lib 2>/dev/null | tr '\n' ':')${LD_LIBRARY_PATH:-}"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

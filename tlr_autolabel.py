@@ -179,9 +179,10 @@ class TrtServer:
         import tempfile
         binary = os.path.join(HERE, "trt_run")
         if not os.path.exists(binary):
+            cuda = os.environ.get("CUDA_HOME", "/usr/local/cuda")
             subprocess.check_call(
                 ["g++", "-O2", os.path.join(HERE, "trt_run.cpp"), "-o", binary,
-                 "-I/usr/local/cuda/include", "-L/usr/local/cuda/lib64",
+                 f"-I{cuda}/include", f"-L{cuda}/lib64",
                  "-lnvinfer", "-lcudart"])
         self.proc = subprocess.Popen([binary, engine_path, "serve"],
                                      stdin=subprocess.PIPE, stdout=subprocess.PIPE,
@@ -424,6 +425,32 @@ def draw(img, results):
 
 PRESET_DIR = os.path.join(HERE, "configs", "detectors")
 
+# Search order for the ML model root, matching Autoware launch's `data_path`
+# default at the end so presets resolve the same on a deployed machine.
+MODEL_ROOT_CANDIDATES = ["~/autoware_data", "/opt/autoware/mlmodels"]
+
+
+def model_root():
+    """Resolve the model root: $TLR_MODEL_ROOT if set, else the first existing
+    candidate. Presets reference models as ${TLR_MODEL_ROOT}/..., so this keeps
+    them free of machine-specific absolute paths."""
+    env = os.environ.get("TLR_MODEL_ROOT")
+    if env:
+        return os.path.expanduser(env)
+    for cand in MODEL_ROOT_CANDIDATES:
+        p = os.path.expanduser(cand)
+        if os.path.isdir(p):
+            return p
+    return os.path.expanduser(MODEL_ROOT_CANDIDATES[0])
+
+
+def expand_path(val):
+    """Expand ~, $VARS, and ${TLR_MODEL_ROOT} (even when the env var is unset,
+    using the resolved model root) in a preset/CLI path string."""
+    return os.path.expanduser(os.path.expandvars(
+        val.replace("${TLR_MODEL_ROOT}", model_root())
+           .replace("$TLR_MODEL_ROOT", model_root())))
+
 
 def list_presets():
     return sorted(os.path.splitext(f)[0] for f in os.listdir(PRESET_DIR)
@@ -445,8 +472,7 @@ def apply_preset(ap, args):
         if dest not in defaults:
             raise SystemExit(f"preset {args.preset}: unknown key {key!r}")
         if isinstance(val, str):
-            # allow $VARS and ~ in preset paths so presets survive machine moves
-            val = os.path.expanduser(os.path.expandvars(val))
+            val = expand_path(val)
         if getattr(args, dest) == defaults[dest]:
             setattr(args, dest, val)
 
@@ -508,9 +534,14 @@ def main():
     if not args.detector:
         raise SystemExit("choose a detector: --preset <name> "
                          f"(available: {', '.join(list_presets())}) or --detector <model path>")
+    # a --detector given directly may also use ~ / $VARS / ${TLR_MODEL_ROOT}
+    args.detector = expand_path(args.detector)
     if not os.path.exists(args.detector):
-        raise SystemExit(f"detector model not found: {args.detector}"
-                         + (f" (from preset {args.preset})" if args.preset else ""))
+        raise SystemExit(
+            f"detector model not found: {args.detector}"
+            + (f" (from preset {args.preset})" if args.preset else "")
+            + f"\nmodel root = {model_root()} "
+            "(set $TLR_MODEL_ROOT to point at your ML model directory).")
 
     detector = Detector(args.detector, args.comlops_param)
     if detector.kind == "comlops":
@@ -561,6 +592,7 @@ def main():
         "preset": args.preset,
         "detector": os.path.basename(args.detector),
         "detector_backend": backend,
+        "model_root": model_root(),
         "classifier": os.path.basename(args.classifier),
         "tiles": bool(args.tiles),
         "det_score_thr": args.det_score_thr,

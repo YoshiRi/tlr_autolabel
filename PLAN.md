@@ -37,12 +37,33 @@
 - [x] dataset の `build/tlr_autolabel_eval_20260718/` へ退避(full_tiles / full_notiles /
       exports(COCO+CVAT) + 来歴README.txt)。AWML派生は `build/awml_derived/`
 
-### 2.5 CVAT レビューラウンド1 → autolabel 評価(進行中 — Claude 側トラックで追跡)
-- [ ] レビュー用CVATタスクzip生成(3カメラ、v2属性の自動アノテーション同梱)→ CVATへインポート
-- [ ] 人手レビュー(state修正 / map id正誤 / review_status付与。RE検証レポートのフラグを優先順位付けに使用)
-- [ ] `import_cvat_signal_annotations.py` で取り込み(検証+正規化)
-- [ ] 評価: `review_status∈{accepted,fixed}` をGT、`raw_state` を予測として検出/状態/地図IDの一致を集計
-- 完了条件: レビュー済みTier Bと評価レポートが dataset `build/` に存在
+### 2.5 CVAT レビューラウンド1 → autolabel 評価(Claude 側トラックで追跡)
+位置づけ確定(2026-07-19、ユーザー決定): GTは常に人力作成。評価層(L6)は
+メトリクス算出基盤 — GT不要指標を常時出し、GT依存指標はレビュー済み
+annotationの存在で自動有効化。
+- [x] レビュー用CVATタスクzip生成(3カメラ×578f、v2属性同梱、dataset `build/cvat_signal/` 計2.3GB + `REVIEW_GUIDE.md`=フラグ付き143フレームの優先リスト)
+- [x] **L6 評価層実装**(2026-07-19: `evaluate_signals.py` → `tlr_eval/v1`。距離ビン別の地図候補カバレッジ/IoU/unknown率、時系列安定性(flip率等)、`--baseline` でrun間比較、GTブロックは review_status 待ち。初回実行: fp32→int8 で unknown 81%→29%、single_frame_flip 2件、100-150mでカバレッジ7%に急落を定量化)
+- [x] **後解析向けデータ設計 → `tlr_eval/v2`**(2026-07-19): 集計済みサマリでなく
+      3つのtidyレジャー(`eval_detections`/`eval_candidates`/`eval_lamps`.jsonl、
+      1行=1観測、全次元を列)を中間生成物として出力し、集計は汎用 `pivot()` の
+      ビューに。歩行者/車両・灯火別(color×shape・矢印方向)・facing・channel・距離を
+      任意group-byで切れる。スキーマ `docs/eval_records.md`。GT到着で正答率も同次元でスライス可。
+      知見: 歩行者ヘッドはmatch 97%だがIoU中央値~0.12(`red_green` way形状と位置は合うが範囲不一致→ped専用投影チェック候補)
+- [ ] [hold] 人手レビュー実施(CVAT環境が手元にない間は保留。zip・ガイドは生成済み)
+- [ ] [hold] CVATでのGT作成を楽にする仕組み(プラグイン/自動アノテーションAPI等)の要否 — CVATプラグイン知識がなく判断保留。判断材料が必要になったら CVAT serverless(nuclio)/SDK の調査から
+- [x] 地図候補の妥当性フィルタ(2026-07-19、カバレッジ過小疑いへの対応):
+      ①エッジオン除外 — 入射角(符号なし法線vs視線)>75°を候補から除外(実測: 70-80°でmatched率12%、80-90°で6%に崩落)。`--max-incidence-deg`
+      ②投影サイズ<8px(検出器min-box)は評価で「too_small」に分離しカバレッジ分母から除外
+      ③**facing符号は解決済み(2026-07-19訂正)**: 当初「復元不能」と誤結論したが、
+      colored state(灯火が読めた)マッチに限定した検証で **linestring方向を-90°回転した
+      法線が正面**(coloredマッチの99%が同側)と実証。逆側のマッチは筐体裏面の
+      `unknown` 検出だった(=「点順序不定」に見えた原因)。実装: 候補を front/back に
+      分類(edge-onは除外)、Tier B に `facing` 属性、backでcolored stateなら
+      `colored_state_on_back_face` フラグ+重み降格(誤対応検出器として機能、38件)。
+      カバレッジは front 検出可能候補のみで算出 — 0-60m 58-61% / 60-100m 44% /
+      100-150m 14%(残余因 = 遮蔽・画端・真の検出漏れ)
+- [ ] レビュー取り込み後: `evaluate_signals.py` 再実行でGT指標(距離別正答率・要素P/R・FP/FN)を確認
+- 完了条件: レビュー済みTier Bと評価レポート(GTブロック有効)が dataset `build/` に存在
 
 ### 3. [hold] AWML 結合テスト(ユーザー指示により保留中)
 - [ ] AWML checkout 上で `create_data_t4dataset.py` を派生データセットに対して実行
@@ -68,6 +89,22 @@
 - [x] `run_dataset.py` オーケストレータ(複数データセット、L1は--skip-existing再開)
 - [ ] 議論持ち越し: candidate_taken 142 の深掘り(1つの地図TLに複数検出が競合 — 地図側のヘッド数不足か、検出重複か)
 
+### 8. [done 2026-07-19] L1 ポータビリティ(パス規約 + 依存 pin)
+- [x] `${TLR_MODEL_ROOT}` 規約(env → ~/autoware_data → /opt/autoware/mlmodels)、
+      プリセットの絶対パス撲滅、`--detector` も展開、`meta.model_root` 記録、欠落時に明示エラー
+- [x] `requirements.txt`(CPU/GPU 2プロファイル、バージョン pin)、`setup_gpu_venv.sh`
+- [x] `run_gpu.sh` の venv を `$TLR_GPU_VENV` 化、`trt_run` ビルドを `$CUDA_HOME` 化
+
+### 9. [backlog] モデル管理(再現性の深掘り — 必要になるまで保留)
+「.engine の移植不可」と「モデルの内容同一性」を根治する塊。1データセット・1マシン
+運用では投資対効果が低いため後回し(2026-07-19 判断):
+- [ ] モデルの sha256 をプリセットに記録・ロード時検証、`meta` に detector/classifier hash
+- [ ] `.engine` のローカルキャッシュ化 + 自動ビルド(キー: model hash × GPU名 × TRT版)、
+      fp32 フォールバック時は品質警告(yolox ブラーFP問題)
+- [ ] プリセットに `source_url`(model zoo / webauto)を持たせ自動取得
+- [ ] `meta` にランタイム来歴(onnxruntime/TRT版、GPU名、ツールの git commit)
+- [ ] Dockerfile(CUDA/TRT pin)で最終保証
+
 ### 6. [backlog] 高速化の続き(現状 0.78s/frame で実用十分。必要になったら)
 - [ ] フレーム間パイプライン化(JPEG デコード/前処理と GPU の重なり)→ ~0.3s/frame 見込み
 - [ ] タイルのバッチ推論(エンジンを batch=5 でリビルド)
@@ -80,4 +117,5 @@
   2. `python3 match_traffic_lights.py --dataset-root <dataset>`
   3. `python3 aggregate_regulatory_signals.py --dataset-root <dataset>`
   4. `python3 render_re_timeline.py --dataset-root <dataset>` → `build/tl_match/re_timeline.html`
+  5. `python3 evaluate_signals.py --dataset-root <dataset> [--baseline <old_sidecar>]` → `build/tl_match/eval_report.{json,md}`
 - このファイルと README、プロジェクトメモリ(`.claude-mine/.../memory/`)が3点セット

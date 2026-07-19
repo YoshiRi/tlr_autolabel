@@ -6,19 +6,26 @@ engine. It always computes GT-free metrics, and the GT-dependent block
 activates automatically when the Tier B sidecar contains reviewed annotations
 (`review_status` in {accepted, fixed, rejected}).
 
-Metric blocks:
-  A. detection profile by distance bin (from build/tl_match/match_report.json):
-     map-candidate coverage (matched vs undetected), matched IoU, unknown rate
-  B. temporal stability (from annotation/traffic_signal_re_timeseries.json):
-     state flips per observation, single-frame flips, unknown fraction
-  C. GT metrics (only when reviewed): prediction = `raw_state`,
-     GT = reviewed `state` of accepted/fixed boxes; exact-state accuracy and
-     element-level precision/recall, by distance bin; FP rate (rejected),
-     FN count (manual boxes)
-  D. optional --baseline <sidecar.json>: run-to-run comparison (e.g. fp32 vs
-     int8 labels) on matched rate / unknown rate / state histogram
+Data design: three tidy long-format ledgers are the reusable artifacts (one
+row = one unit of observation); every report table is a `pivot()` view of them,
+so slicing by pedestrian/vehicle, lamp color/shape/arrow, facing, channel,
+distance, matched/unmatched, reviewed/not is a group-by, not new code. See
+docs/eval_records.md for the column schemas.
 
-Outputs: build/tl_match/eval_report.json (+ eval_report.md summary).
+  eval_detections.jsonl — unit: one detected box (Tier B annotation)
+  eval_candidates.jsonl — unit: one projected map traffic_light (front/back)
+  eval_lamps.jsonl      — unit: one lamp of a detection (exploded state tokens)
+
+Metric blocks (all views over the ledgers):
+  A. detection profile by distance bin: candidate coverage, matched IoU, unknown
+  B. temporal stability (from traffic_signal_re_timeseries.json)
+  C. GT metrics (only when reviewed): state accuracy + element P/R, sliceable
+     by signal_kind / distance / facing; FP (rejected), FN (manual boxes)
+  D. optional --baseline <sidecar.json>: run-to-run comparison
+  cuts: detections by signal_kind / facing / channel; lamps by color×shape and
+        arrow direction (add any group-by you need on the jsonl files)
+
+Outputs: build/tl_match/eval_report.{json,md} + eval_{detections,candidates,lamps}.jsonl.
 """
 
 from __future__ import annotations
@@ -53,16 +60,33 @@ def ann_state(ann: dict) -> str:
 # --------------------------------------------------------- A: detection profile
 
 
+MIN_DETECTABLE_PX = 8.0  # detector --min-box: below this a miss is expected
+
+
 def detection_profile(match_report: dict, sidecar_by_token: dict):
     bins = defaultdict(lambda: {
-        "map_candidates": 0, "candidates_matched": 0,
+        "map_candidates": 0, "detectable": 0, "detectable_matched": 0,
+        "back": 0, "back_matched": 0,
+        "too_small": 0, "too_small_matched": 0,
         "matched_iou": [], "unknown_matched": 0, "matched": 0})
     unmatched_detections = 0
     for frame in match_report["frames"]:
         for cand in frame.get("candidates", []):
             b = bins[bin_of(cand["distance_m"])]
             b["map_candidates"] += 1
-            b["candidates_matched"] += bool(cand["matched"])
+            small = cand.get("proj_min_side_px") is not None and \
+                cand["proj_min_side_px"] < MIN_DETECTABLE_PX
+            if cand.get("facing") == "back":
+                # the housing's back: lamps unreadable, an `unknown` box is
+                # possible but absence is not a miss -> excluded from coverage
+                b["back"] += 1
+                b["back_matched"] += bool(cand["matched"])
+            elif small:
+                b["too_small"] += 1
+                b["too_small_matched"] += bool(cand["matched"])
+            else:
+                b["detectable"] += 1
+                b["detectable_matched"] += bool(cand["matched"])
         for pair in frame["pairs"]:
             if pair["map_traffic_light_id"] is None:
                 unmatched_detections += 1
@@ -79,8 +103,13 @@ def detection_profile(match_report: dict, sidecar_by_token: dict):
         ious = sorted(b["matched_iou"])
         profile[name] = {
             "map_candidates": b["map_candidates"],
-            "candidate_coverage": round(b["candidates_matched"] / b["map_candidates"], 3)
-                                  if b["map_candidates"] else None,
+            "detectable_candidates": b["detectable"],
+            "candidate_coverage": round(b["detectable_matched"] / b["detectable"], 3)
+                                  if b["detectable"] else None,
+            "back_candidates": b["back"],
+            "back_matched": b["back_matched"],
+            "too_small_candidates": b["too_small"],
+            "too_small_matched": b["too_small_matched"],
             "matched_detections": b["matched"],
             "matched_iou_median": round(ious[len(ious) // 2], 3) if ious else None,
             "unknown_rate": round(b["unknown_matched"] / b["matched"], 3) if b["matched"] else None,
@@ -169,6 +198,153 @@ def gt_metrics(sidecar: dict, distance_by_token: dict):
     return result
 
 
+# -------------------------------------------------------- tidy record ledgers
+#
+# The report tables below are just *views*. The reusable artifacts are three
+# long-format ledgers (one row = one unit of observation), so any later cut
+# (pedestrian vs vehicle, per lamp color/shape/arrow, facing, channel, distance,
+# state, matched/unmatched, reviewed/not) is a group-by, not new code:
+#
+#   detections  — unit: one detected box (Tier B annotation). precision side,
+#                 state accuracy, unknown rate. dims: channel, signal_kind,
+#                 facing, distance_bin, state, matched, review_status, subtype.
+#   candidates  — unit: one projected map traffic_light (front/back). recall /
+#                 coverage side. dims: distance_bin, facing, detectable, subtype.
+#   lamps       — unit: one lamp of one detection (exploded from state tokens).
+#                 dims: color, shape, arrow, is_arrow + the detection's dims.
+#
+# All three share join keys (sample_data_token, way_id) so they can be
+# re-joined externally (pandas etc.). Files: build/tl_match/eval_{detections,
+# candidates,lamps}.jsonl.
+
+
+def signal_kind_of(state: str, attr_kind: str | None) -> str:
+    if attr_kind:
+        return attr_kind
+    els = parse_state(state)
+    if any(e["shape"] == "ped" for e in els):
+        return "pedestrian"
+    return "vehicle" if els else "unknown"
+
+
+def build_detection_records(sidecar: dict, pair_index: dict) -> list[dict]:
+    records = []
+    for a in sidecar["annotations"]:
+        attr = a["attributes"]
+        state = ann_state(a)
+        box = a["box2d"]
+        pair = pair_index.get((a["sample_data_token"], tuple(round(float(v), 1) for v in box)))
+        distance = pair["distance_m"] if pair else None
+        review = attr.get("review_status", "unchecked")
+        gt_state = attr.get("state") if review in GT_STATUSES else None
+        records.append({
+            "row_id": len(records),
+            "det_token": a["token"],
+            "sample_token": a["sample_token"],
+            "sample_data_token": a["sample_data_token"],
+            "channel": a["channel"],
+            "timestamp": a.get("timestamp"),
+            "det_box": box,
+            "det_min_side_px": round(min(box[2] - box[0], box[3] - box[1]), 1),
+            "detector_score": float(attr["detector_score"]) if attr.get("detector_score") else None,
+            "state": state,
+            "signal_kind": signal_kind_of(state, attr.get("signal_kind")),
+            "n_lamps": len(parse_state(state)),
+            "is_unknown": state == "unknown",
+            "way_id": attr.get("map_traffic_light_id") or None,
+            "regulatory_element_id": attr.get("regulatory_element_id") or None,
+            "subtype": pair.get("map_subtype") if pair else None,
+            "facing": attr.get("facing") or None,
+            "matched": bool(attr.get("map_traffic_light_id")),
+            "iou": pair["iou"] if pair else None,
+            "distance_m": distance,
+            "distance_bin": bin_of(distance),
+            "review_status": review,
+            "gt_state": None if gt_state is None else (elements_key(parse_state(gt_state)) or "unknown"),
+            "state_correct": None if gt_state is None
+                             else (elements_key(parse_state(gt_state)) == state),
+        })
+    return records
+
+
+def build_candidate_records(match_report: dict) -> list[dict]:
+    records = []
+    for frame in match_report["frames"]:
+        for c in frame.get("candidates", []):
+            facing = c.get("facing") or None
+            small = c.get("proj_min_side_px") is not None and c["proj_min_side_px"] < MIN_DETECTABLE_PX
+            detectable = facing != "back" and not small
+            records.append({
+                "row_id": len(records),
+                "sample_data_token": frame["sample_data_token"],
+                "channel": frame["channel"],
+                "way_id": c["way_id"],
+                "distance_m": c["distance_m"],
+                "distance_bin": bin_of(c["distance_m"]),
+                "facing": facing,
+                "facing_deg": c.get("facing_deg"),
+                "proj_min_side_px": c.get("proj_min_side_px"),
+                "too_small": small,
+                "detectable": detectable,
+                "matched": bool(c["matched"]),
+            })
+    return records
+
+
+def build_lamp_records(detection_records: list[dict]) -> list[dict]:
+    records = []
+    for d in detection_records:
+        for e in parse_state(d["state"]):
+            records.append({
+                "row_id": len(records),
+                "det_token": d["det_token"],
+                "channel": d["channel"],
+                "signal_kind": d["signal_kind"],
+                "facing": d["facing"],
+                "distance_bin": d["distance_bin"],
+                "matched": d["matched"],
+                "way_id": d["way_id"],
+                "color": e["color"],
+                "shape": e["shape"],
+                "arrow": e["arrow"],
+                "is_arrow": e["shape"] == "arrow",
+                "lamp_token": f"{e['color']}-{e['shape']}" + (f"-{e['arrow']}" if e["arrow"] else ""),
+            })
+    return records
+
+
+def pivot(records: list[dict], group_by: list[str], metrics: dict) -> list[dict]:
+    """Generic group-by over a ledger. `metrics` maps name -> fn(list[row])."""
+    groups = defaultdict(list)
+    for r in records:
+        groups[tuple(r.get(g) for g in group_by)].append(r)
+    rows = []
+    for key, rs in sorted(groups.items(), key=lambda kv: [str(x) for x in kv[0]]):
+        row = dict(zip(group_by, key))
+        for name, fn in metrics.items():
+            row[name] = fn(rs)
+        rows.append(row)
+    return rows
+
+
+def _rate(pred):
+    return lambda rs: round(sum(1 for r in rs if pred(r)) / len(rs), 3) if rs else None
+
+
+def _median(field):
+    def fn(rs):
+        vals = sorted(r[field] for r in rs if r.get(field) is not None)
+        return round(vals[len(vals) // 2], 3) if vals else None
+    return fn
+
+
+def write_jsonl(path: Path, records: list[dict]):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w") as f:
+        for r in records:
+            f.write(json.dumps(r, ensure_ascii=False) + "\n")
+
+
 # ---------------------------------------------------------------- D: baseline
 
 
@@ -201,31 +377,66 @@ def main():
     match_report = json.loads((root / "build/tl_match/match_report.json").read_text())
     timeseries = json.loads((root / "annotation/traffic_signal_re_timeseries.json").read_text())
 
-    # distance per Tier B token, via match_report pairs (same box in same frame)
-    distance_by_token = {}
+    # index match_report pairs by (sample_data_token, rounded box) for the join
     box_key = lambda t, b: (t, tuple(round(float(v), 1) for v in b))
-    pair_distance = {}
+    pair_index = {}
     for frame in match_report["frames"]:
         for pair in frame["pairs"]:
-            pair_distance[box_key(frame["sample_data_token"], pair["detection_box"])] = pair["distance_m"]
-    for a in sidecar["annotations"]:
-        distance_by_token[a["token"]] = pair_distance.get(
-            box_key(a["sample_data_token"], a["box2d"]))
+            pair_index[box_key(frame["sample_data_token"], pair["detection_box"])] = pair
+    distance_by_token = {a["token"]: (pair_index.get(box_key(a["sample_data_token"], a["box2d"])) or {}).get("distance_m")
+                         for a in sidecar["annotations"]}
+
+    # tidy ledgers (the reusable analysis artifacts) -----------------------
+    det_records = build_detection_records(sidecar, pair_index)
+    cand_records = build_candidate_records(match_report)
+    lamp_records = build_lamp_records(det_records)
+    out = root / args.output
+    write_jsonl(out.with_name("eval_detections.jsonl"), det_records)
+    write_jsonl(out.with_name("eval_candidates.jsonl"), cand_records)
+    write_jsonl(out.with_name("eval_lamps.jsonl"), lamp_records)
+
+    # default report views, all derived from the ledgers via pivot ---------
+    det_metrics = {"n": len, "matched_rate": _rate(lambda r: r["matched"]),
+                   "unknown_rate": _rate(lambda r: r["is_unknown"]),
+                   "iou_median": _median("iou")}
+    cov_metrics = {"candidates": len,
+                   "detectable": lambda rs: sum(r["detectable"] for r in rs),
+                   "coverage": lambda rs: (round(sum(r["matched"] for r in rs if r["detectable"])
+                                                 / max(sum(r["detectable"] for r in rs), 1), 3))}
+    lamp_metrics = {"n": len, "matched_rate": _rate(lambda r: r["matched"])}
 
     profile, unmatched_dets = detection_profile(match_report, distance_by_token)
     report = {
-        "schema_version": "tlr_eval/v1",
+        "schema_version": "tlr_eval/v2",
         "inputs": {"sidecar": str(args.sidecar), "run": run_summary(sidecar)},
+        "ledgers": {"detections": len(det_records), "candidates": len(cand_records),
+                    "lamps": len(lamp_records),
+                    "files": ["eval_detections.jsonl", "eval_candidates.jsonl", "eval_lamps.jsonl"]},
         "detection_profile_by_distance": profile,
         "unmatched_detections": unmatched_dets,
+        "cuts": {
+            "detections_by_signal_kind": pivot(det_records, ["signal_kind"], det_metrics),
+            "detections_by_facing": pivot(det_records, ["facing"], det_metrics),
+            "detections_by_channel": pivot(det_records, ["channel"], det_metrics),
+            "coverage_by_signal_kind_distance": pivot(cand_records, ["distance_bin"], cov_metrics),
+            "lamps_by_color_shape": pivot(lamp_records, ["color", "shape"], lamp_metrics),
+            "lamps_by_arrow_dir": pivot([r for r in lamp_records if r["is_arrow"]],
+                                        ["arrow"], lamp_metrics),
+        },
         "stability": stability_metrics(timeseries),
         "gt": gt_metrics(sidecar, distance_by_token),
     }
+    # when GT exists, state accuracy is sliceable on the same ledger dimensions
+    gt_rows = [r for r in det_records if r["state_correct"] is not None]
+    if gt_rows and report["gt"]:
+        acc = {"n": len, "state_accuracy": _rate(lambda r: r["state_correct"])}
+        report["gt"]["accuracy_by_signal_kind"] = pivot(gt_rows, ["signal_kind"], acc)
+        report["gt"]["accuracy_by_distance"] = pivot(gt_rows, ["distance_bin"], acc)
+        report["gt"]["accuracy_by_facing"] = pivot(gt_rows, ["facing"], acc)
     if args.baseline:
         report["baseline"] = {"path": str(args.baseline),
                               "run": run_summary(json.loads((root / args.baseline).read_text()))}
 
-    out = root / args.output
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(report, indent=2))
 
@@ -234,11 +445,36 @@ def main():
           f"map matched {report['inputs']['run']['map_matched_rate']:.1%}, "
           f"unknown {report['inputs']['run']['unknown_rate']:.1%}", "",
           "## Detection profile by distance", "",
-          "| bin | map candidates | coverage | matched dets | IoU med | unknown rate |",
-          "|---|---:|---:|---:|---:|---:|"]
+          "(coverage = matched / front-facing detectable candidates; back-facing, "
+          f"sub-{MIN_DETECTABLE_PX:.0f}px and edge-on candidates are excluded from the denominator)", "",
+          "| bin | candidates | front detectable | coverage | back (matched) | too small | matched dets | IoU med | unknown rate |",
+          "|---|---:|---:|---:|---:|---:|---:|---:|---:|"]
     for name, b in report["detection_profile_by_distance"].items():
-        md.append(f"| {name} | {b['map_candidates']} | {b['candidate_coverage']} | "
+        md.append(f"| {name} | {b['map_candidates']} | {b['detectable_candidates']} | "
+                  f"{b['candidate_coverage']} | {b['back_candidates']} ({b['back_matched']}) | "
+                  f"{b['too_small_candidates']} | "
                   f"{b['matched_detections']} | {b['matched_iou_median']} | {b['unknown_rate']} |")
+    def cut_table(title, rows, cols):
+        block = ["", f"## {title}", "", "| " + " | ".join(cols) + " |",
+                 "|" + "|".join(["---"] * len(cols)) + "|"]
+        for r in rows:
+            block.append("| " + " | ".join(str(r.get(c, "")) for c in cols) + " |")
+        return block
+
+    md += ["", "_Cuts below are pivot views of the tidy ledgers "
+           "(`eval_detections.jsonl` / `eval_candidates.jsonl` / `eval_lamps.jsonl`); "
+           "slice any other way with a group-by on those files._"]
+    md += cut_table("Detections by signal kind", report["cuts"]["detections_by_signal_kind"],
+                    ["signal_kind", "n", "matched_rate", "unknown_rate", "iou_median"])
+    md += cut_table("Detections by facing", report["cuts"]["detections_by_facing"],
+                    ["facing", "n", "matched_rate", "unknown_rate", "iou_median"])
+    md += cut_table("Detections by channel", report["cuts"]["detections_by_channel"],
+                    ["channel", "n", "matched_rate", "unknown_rate", "iou_median"])
+    md += cut_table("Lamps by color × shape", report["cuts"]["lamps_by_color_shape"],
+                    ["color", "shape", "n", "matched_rate"])
+    md += cut_table("Arrow lamps by direction", report["cuts"]["lamps_by_arrow_dir"],
+                    ["arrow", "n", "matched_rate"])
+
     st = report["stability"]["overall"]
     md += ["", "## Stability", "",
            f"- head groups: {st['head_groups']}, observations: {st['observations']}",

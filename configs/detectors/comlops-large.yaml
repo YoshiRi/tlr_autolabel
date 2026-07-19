@@ -2,7 +2,7 @@
 # traffic-light detector. No TensorRT engine exists; fp32 ONNX verified clean
 # (no blur FPs). Run via run_gpu.sh for speed. Decode params (empirically
 # fitted anchors) come from comlops_large_detector_ml.param.yaml.
-detector: /home/yoshiri/autoware_data/traffic_light_classifier/CoMLOps-Large-Detection-Model-v1.0.1.onnx
+detector: ${TLR_MODEL_ROOT}/traffic_light_classifier/CoMLOps-Large-Detection-Model-v1.0.1.onnx
 det_score_thr: 0.3
 det_classes: TRAFFIC_LIGHT
 tiles: true

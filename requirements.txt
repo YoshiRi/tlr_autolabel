@@ -1,0 +1,24 @@
+# tlr_autolabel Python dependencies.
+#
+# Two install profiles:
+#   CPU / system python (L1 CPU, L2/L3/L4 tools): the non-onnxruntime-gpu lines.
+#   GPU venv (fast L1): everything, into a dedicated venv — see setup_gpu_venv.sh.
+#
+# Versions are pinned to what this pipeline was validated against (2026-07).
+# TensorRT itself is NOT a pip dep here: the .engine path uses the system
+# libnvinfer (10.8) via the trt_run C++ helper. onnxruntime-gpu is only needed
+# for the fp32 GPU path (CoMLOps-Large; YOLOX should use the int8 engine).
+
+numpy==1.26.4
+opencv-python-headless==4.10.0.84
+pyyaml==6.0.2
+scipy==1.13.1          # match_traffic_lights.py (Hungarian assignment)
+
+# GPU-only (install into the venv via setup_gpu_venv.sh; skip for CPU/system):
+# onnxruntime-gpu==1.23.0
+# nvidia-cufft-cu12
+# nvidia-cublas-cu12
+# nvidia-curand-cu12
+# nvidia-cuda-runtime-cu12
+# nvidia-cuda-nvrtc-cu12
+# nvidia-cudnn-cu12

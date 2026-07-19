@@ -120,6 +120,7 @@ def add_meta(root_el: ET.Element, task_name: str, size: int) -> None:
             ("review_status", "select", "unchecked\naccepted\nrejected\nfixed", True),
             ("map_traffic_light_id", "text", "", True),
             ("regulatory_element_id", "text", "", False),
+            ("facing", "text", "", False),
             ("raw_state", "text", "", False),
             ("detector_score", "text", "", False),
             ("source_type", "select", "manual\nprojected_map\nauto", False),

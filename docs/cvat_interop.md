@@ -44,6 +44,7 @@
 | `review_status` | select | `unchecked` `accepted` `rejected` `fixed` / `unchecked` | **する** | レビュー状態。評価のGTは `accepted`+`fixed` |
 | `map_traffic_light_id` | text | lanelet2 way id / 自動対応付け結果 | する | 誤対応の修正可。空=対応なし |
 | `regulatory_element_id` | text | relation idカンマ結合 / 導出値 | しない | 表示専用。importで `map_traffic_light_id` から**常に再導出** |
+| `facing` | text | `front` `back` / 導出値(未マッチは空) | しない | 灯器面の向き(linestring方向-90°回転の法線、本地図で実証済み)。`back` は筐体裏面の検出 — colored stateなら誤対応疑い |
 | `raw_state` | text | autolabelの元state | しない | 検出器の原文。人手修正後も不変(diff用) |
 | `detector_score` | text | 検出スコア / 空(手動box) | しない | provenance |
 | `source_type` | select | `manual` `projected_map` `auto` / CVAT新規box=`manual`(先頭)、自動生成分は `auto` 値で出力 | しない | 由来の区別 |

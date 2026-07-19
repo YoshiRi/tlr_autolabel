@@ -16,6 +16,7 @@ each layer's output contract is one of the three annotation tiers below.
 | **L3 map enrichment** | attach map context per detection: lanelet2 traffic_light way + regulatory element, via ego pose + calibration; then multi-camera / multi-head fusion into RE time series | Tier A + T4 map/annotation -> Tier B (`traffic_signal_2d/v2` sidecar) -> `traffic_signal_re/v1` | `match_traffic_lights.py`, `aggregate_regulatory_signals.py`, `render_re_timeline.py` (this repo, since 2026-07-19) |
 | **L4 annotation conversion** | convert T4 annotations to external tool formats (CVAT / deepen) and back | Tier B <-> Tier C | CVAT pair in this repo (`export_cvat_signal_task.py` / `import_cvat_signal_annotations.py`; contract `docs/cvat_interop.md`, since 2026-07-19); deepen: other repos, vocab table only |
 | **L5 ros2 verification** (option) | feed the same images through actual ROS 2 nodes and compare against L1 results | images -> live pipeline output | `ros2_pipeline/` (quarantined until verified; acceptance = parity with the launched Autoware pipeline, i.e. the int8 engine results) |
+| **L6 evaluation** | metrics engine over enriched labels: emits three tidy ledgers (detections / candidates / lamps) as the analysis substrate, then distance / signal_kind / facing / channel / per-lamp cuts, temporal stability, run-to-run baseline diff; GT metrics activate automatically once reviewed annotations exist (GT is always human-made — this layer never generates it) | Tier B + `traffic_signal_re/v1` (+ reviewed GT) -> `tlr_eval/v2` report + `eval_{detections,candidates,lamps}.jsonl` (schema `docs/eval_records.md`) | `evaluate_signals.py` (this repo, since 2026-07-19) |
 
 Design rules that keep the layers clean:
 
@@ -28,6 +29,8 @@ Design rules that keep the layers clean:
   attached to Tier B records; Tier A files stay untouched.
 - **L5 is out of the dependency graph.** Nothing in L1-L4 may import from or
   require `ros2_pipeline/`.
+- **L6 is pure analysis.** It only reads L3 outputs (and reviewed GT when
+  present); it never writes annotations and never re-runs inference.
 
 ## Annotation tiers (3 specs)
 
@@ -66,6 +69,31 @@ python3 tlr_autolabel.py <dir> --preset yolox-1920-int8 --out-dir ./labels
 A detector must be chosen explicitly (`--preset` or `--detector`); explicit CLI
 flags always override preset values (`--no-tiles` cancels a preset's
 `tiles: true`). testM exists as a model directory but is empty — no preset.
+
+### Portability: model paths and environment
+
+Presets reference models by `${TLR_MODEL_ROOT}/...`, never an absolute path.
+The root resolves as: `$TLR_MODEL_ROOT` if set, else the first existing of
+`~/autoware_data`, `/opt/autoware/mlmodels` (the last matches Autoware launch's
+`data_path`). `--detector` given directly also expands `~` / `$VARS` /
+`${TLR_MODEL_ROOT}`. The resolved root is recorded in `meta.model_root`, and a
+missing model fails fast printing the root and how to set it.
+
+Environment setup:
+
+- Python deps are pinned in `requirements.txt` (CPU/system profile: the active
+  lines; GPU profile: the commented onnxruntime-gpu block).
+- `setup_gpu_venv.sh` builds the onnxruntime-gpu venv that `run_gpu.sh` uses;
+  its location is `$TLR_GPU_VENV` (default `~/.venvs/tlr_onnxgpu`).
+- The `.engine` build uses `$CUDA_HOME` (default `/usr/local/cuda`) and the
+  system libnvinfer (TensorRT 10.x).
+
+> **`.engine` files are not portable**: a TensorRT engine is specific to the
+> GPU architecture + TRT version it was built on. Presets that name a
+> `.engine` assume it was built on this machine. On a different machine, either
+> rebuild the engine from the ONNX, or point the preset at the `.onnx` and run
+> via `run_gpu.sh`. A portable engine cache (build-on-demand keyed by
+> GPU/TRT/model hash) is backlog — see PLAN "model management".
 
 ### Trying a new model (試走)
 

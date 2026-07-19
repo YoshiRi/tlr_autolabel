@@ -65,10 +65,18 @@ def load_lanelet2_traffic_lights(osm_path: Path):
         bottom = np.array(pts)
         up = np.array([0.0, 0.0, height])
         corners = np.vstack([bottom, bottom + up])
+        # signed face normal: linestring direction rotated -90 deg ([dy, -dx]).
+        # Empirically verified on this map: 99% of matches whose lamps were
+        # readable (colored state) lie on this side; the opposite side only
+        # collects `unknown` boxes = detections of the housing's back.
+        direction = pts[-1][:2] - pts[0][:2]
+        normal = np.array([direction[1], -direction[0]])
+        norm = np.linalg.norm(normal)
         traffic_lights[way.get("id")] = {
             "corners": corners,
             "subtype": tags.get("subtype", ""),
             "height": height,
+            "facing_axis": normal / norm if norm > 1e-9 else None,
         }
 
     regulatory_by_way: dict[str, list[str]] = defaultdict(list)
@@ -138,8 +146,17 @@ def load_t4_index(root: Path):
 # ------------------------------------------------------------------ projection
 
 
-def project_traffic_lights(frame, traffic_lights, max_distance, image_wh, margin=100.0):
-    """Project all map traffic lights into this frame -> list of candidates."""
+def project_traffic_lights(frame, traffic_lights, max_distance, image_wh, margin=100.0,
+                           max_incidence_deg=75.0):
+    """Project all map traffic lights into this frame -> list of candidates.
+
+    Facing classification per candidate (angle between the signed face normal
+    and the sight line): "front" (<= max_incidence_deg -- lamps readable),
+    "back" (>= 180 - max_incidence_deg -- the housing's back, detector may
+    still fire an `unknown` box on it). Near-edge-on candidates in between are
+    dropped: empirical matched-rate collapses there (12% at 70-80, 6% at
+    80-90 unsigned incidence).
+    """
     ego = frame["ego_pose"]
     calib = frame["calib"]
     t_map_base = pose_to_matrix(ego["translation"], ego["rotation"])
@@ -148,6 +165,7 @@ def project_traffic_lights(frame, traffic_lights, max_distance, image_wh, margin
     intrinsic = np.array(calib["camera_intrinsic"])
     width, height = image_wh
     ego_xy = np.array(ego["translation"][:2])
+    cos_max = np.cos(np.radians(max_incidence_deg))
 
     candidates = []
     for way_id, tl in traffic_lights.items():
@@ -155,6 +173,18 @@ def project_traffic_lights(frame, traffic_lights, max_distance, image_wh, margin
         distance = float(np.linalg.norm(center[:2] - ego_xy))
         if distance > max_distance:
             continue
+        facing = ""
+        facing_deg = None
+        if tl["facing_axis"] is not None and distance > 1e-6:
+            sight = (ego_xy - center[:2]) / distance
+            cos_face = float(np.dot(tl["facing_axis"], sight))
+            facing_deg = float(np.degrees(np.arccos(np.clip(cos_face, -1.0, 1.0))))
+            if cos_face >= cos_max:
+                facing = "front"
+            elif cos_face <= -cos_max:
+                facing = "back"
+            else:
+                continue  # edge-on: lamps unreadable and box degenerate
         pts_cam = (t_cam_map[:3, :3] @ tl["corners"].T + t_cam_map[:3, 3:4]).T
         if np.any(pts_cam[:, 2] < 1.0):  # behind or grazing the image plane
             continue
@@ -170,6 +200,9 @@ def project_traffic_lights(frame, traffic_lights, max_distance, image_wh, margin
                 "subtype": tl["subtype"],
                 "bbox": [float(x0), float(y0), float(x1), float(y1)],
                 "distance_m": distance,
+                "facing": facing,
+                "facing_deg": None if facing_deg is None else round(facing_deg, 1),
+                "proj_min_side_px": round(float(min(x1 - x0, y1 - y0)), 1),
             }
         )
     return candidates
@@ -345,6 +378,9 @@ def parse_args():
                         help="Diagnostics path (default: build/tl_match/match_report.json; "
                              "not written when --frames is used unless given explicitly).")
     parser.add_argument("--max-distance", default=150.0, type=float)
+    parser.add_argument("--max-incidence-deg", default=75.0, type=float,
+                        help="Drop map candidates seen closer to edge-on than this "
+                             "(unsigned face-normal vs sight-line angle).")
     parser.add_argument("--gate-factor", default=1.5, type=float)
     parser.add_argument("--min-score", default=0.5, type=float,
                         help="Ignore detections below this detector_score.")
@@ -401,7 +437,8 @@ def main():
                       if d.get("detector_score", 1.0) >= args.min_score]
         image_wh = (payload.get("width", 2880), payload.get("height", 1860))
 
-        candidates = project_traffic_lights(frame, traffic_lights, args.max_distance, image_wh)
+        candidates = project_traffic_lights(frame, traffic_lights, args.max_distance, image_wh,
+                                            max_incidence_deg=args.max_incidence_deg)
         matches = match_boxes(detections, candidates, gate_factor=args.gate_factor)
 
         stats["frames"] += 1
@@ -425,7 +462,10 @@ def main():
             # evaluation layer bins detection coverage by distance from these
             "candidates": [
                 {"way_id": c["way_id"], "distance_m": c["distance_m"],
-                 "bbox": c["bbox"], "matched": j in matched_cand_idx}
+                 "bbox": c["bbox"], "facing": c["facing"],
+                 "facing_deg": c["facing_deg"],
+                 "proj_min_side_px": c["proj_min_side_px"],
+                 "matched": j in matched_cand_idx}
                 for j, c in enumerate(candidates)
             ],
             "pairs": [],
@@ -455,6 +495,7 @@ def main():
                         "review_status": "unchecked",
                         "map_traffic_light_id": cand["way_id"] if cand else "",
                         "regulatory_element_id": ",".join(reg_ids),
+                        "facing": cand["facing"] if cand else "",
                         "raw_state": raw_state(det),
                         "detector_score": ("" if det.get("detector_score") is None
                                            else f"{det['detector_score']}"),
