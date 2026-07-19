@@ -377,6 +377,15 @@ element timeline (ported from the dataset-side `tools/` on 2026-07-19; token
 parsing unified on the canonical vocabulary via `state_tokens.py`, with legacy
 paren-style fallback):
 
+One command runs everything over one or more datasets (L1 per camera channel
+with `--skip-existing` resume, then the three stages below):
+
+```bash
+python3 run_dataset.py <dataset_root> [...] --preset yolox-1920-int8 [--run-id ID]
+```
+
+Or stage by stage:
+
 ```bash
 # 1) associate detections with lanelet2 traffic_light ways (Hungarian matching
 #    on projected boxes) and resolve regulatory elements -> Tier B sidecar.
@@ -395,6 +404,25 @@ python3 render_re_timeline.py --dataset-root <dataset>
 
 The lanelet2 `light_bulbs` color tags use `yellow`; canonical `amber` is
 translated only at the map-comparison boundary (`state_tokens.bulb_color`).
+
+Fusion repair policies (decided 2026-07-19):
+
+- **Arrow directions snap to the map** when the detected direction is
+  infeasible and the map's bulbs allow exactly one direction for that color
+  (8-way classifiers miss by one sector; the map is authoritative for which
+  arrows exist). Colors/shapes are never snapped — those mismatches may be
+  stale-map bugs and only down-weight votes. Effect on c1af6a38: 30 snaps,
+  cross-camera/head disagreements 36 -> 24 each.
+- **Single-frame flips are repaired**, not just flagged: an observation whose
+  neighbors agree on a different state takes the neighbors' state
+  (`state_original` + `state_source: temporal_fix` keep the raw value).
+- **No interpolation of unobserved gaps**: an RE not seen at a sample simply
+  has no observation — a signal may change while unobserved, so invented
+  labels would poison training data.
+- **Unmatched detections are classified, not dropped silently**
+  (`unmatched_reason` in `build/tl_match/match_report.json`):
+  `state_unknown_backside` / `no_map_candidate_in_view` / `candidate_taken` /
+  `beyond_gate` / `geometry_mismatch` — feed these to the review round.
 
 ### Tier B schema: `traffic_signal_2d/v2` (per-detection sidecar)
 
@@ -477,13 +505,16 @@ Flag vocabulary (review triage; also summarized in
 | `cross_camera_state_disagreement` | cameras disagree on one head's state |
 | `cross_head_state_disagreement` | heads of one regulatory element disagree |
 | `partial_unknown` | some sources voted unknown |
-| `single_frame_flip` | state differs from identical neighbors (1-frame glitch) |
-| `color_not_in_map_bulbs:<c>` / `arrow_without_map_bulb:<d>` / `arrow_dir_mismatch:<d>(map:<dirs>)` | detected state impossible for the map's bulb layout |
+| `single_frame_flip_fixed` | 1-frame glitch repaired from neighbors (raw in `state_original`) |
+| `arrow_dir_snapped:<from>-><to>` | arrow direction corrected to the map's unique feasible direction |
+| `color_not_in_map_bulbs:<c>` / `arrow_without_map_bulb:<d>` / `arrow_dir_mismatch:<d>(map:<dirs>)` | detected state impossible for the map's bulb layout (vote down-weighted, never snapped) |
 | `ped_on_vehicle_bulbs` | pedestrian lamp matched to a vehicle head |
 | `no_bulb_info_in_map` | map has no light_bulbs entry to validate against |
 
 Fusion weighting: each vote is scaled by `0.25^n_bulb_flags` (map-infeasible
 states count less) and, at RE level, by the head's own fused confidence.
+`re_verification_report.json` orders `flagged_observations` by
+`review_priority = n_flags + (1 - confidence)` for CVAT triage.
 
 ## Preprocessing (must match the Autoware nodes exactly)
 

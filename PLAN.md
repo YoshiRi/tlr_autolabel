@@ -59,6 +59,15 @@
 - [x] deepen 形式対応表(2026-07-19: `configs/state_vocab/deepen.yaml` — db_tlr互換を仮定した契約表+v2属性パススルー。ラベルセットの実確認は変換リポジトリ側とのすり合わせ待ち)
 - [ ] testM ディレクトリが空(モデル配置待ち → 配置されたらプリセット追加)
 
+### 7. L3議論の決定事項の実装(2026-07-19 実装完了、全数値は c1af6a38)
+- [x] 単発フリップ自動修復(12件、`state_original`保持)
+- [x] 矢印方向の地図スナップ(30件: up_right→up 18 + up_left→up 12。不一致 36→24 に減少)
+- [x] 未マッチ分類(`unmatched_reason`: candidate_taken 142 / beyond_gate 53 / 背面23 / 幾何2)
+- [x] 補間しないポリシー明記(README)
+- [x] `review_priority` によるレビュー優先順位(re_verification_report)
+- [x] `run_dataset.py` オーケストレータ(複数データセット、L1は--skip-existing再開)
+- [ ] 議論持ち越し: candidate_taken 142 の深掘り(1つの地図TLに複数検出が競合 — 地図側のヘッド数不足か、検出重複か)
+
 ### 6. [backlog] 高速化の続き(現状 0.78s/frame で実用十分。必要になったら)
 - [ ] フレーム間パイプライン化(JPEG デコード/前処理と GPU の重なり)→ ~0.3s/frame 見込み
 - [ ] タイルのバッチ推論(エンジンを batch=5 でリビルド)

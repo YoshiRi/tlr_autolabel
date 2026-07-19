@@ -228,6 +228,32 @@ def match_boxes(detections, candidates, gate_factor=1.5, min_iou=0.05, unmatch_c
     return {int(i): int(j) for i, j in zip(rows, cols) if j < n_cand and cost[i, j] < unmatch_cost}
 
 
+def unmatched_reason(det, det_state, candidates, matches, gate_factor=1.5):
+    """Classify why a detection stayed unmatched (review triage; report-only).
+    Categories, checked in order:
+      state_unknown_backside  — classifier saw no lamps (likely back/side view)
+      no_map_candidate_in_view — no projected map TL in this frame at all
+      candidate_taken         — nearest candidate was assigned to another detection
+      beyond_gate             — nearest candidate exists but is too far
+      geometry_mismatch       — within gate yet rejected (size ratio / cost)
+    """
+    if det_state == "unknown":
+        return "state_unknown_backside"
+    if not candidates:
+        return "no_map_candidate_in_view"
+    dbox = det["box_xyxy"]
+    ddiag = np.hypot(dbox[2] - dbox[0], dbox[3] - dbox[1])
+    dists = [float(np.linalg.norm(center(dbox) - center(c["bbox"]))) for c in candidates]
+    j = int(np.argmin(dists))
+    if j in set(matches.values()):
+        return "candidate_taken"
+    cbox = candidates[j]["bbox"]
+    cdiag = np.hypot(cbox[2] - cbox[0], cbox[3] - cbox[1])
+    if dists[j] > gate_factor * max(cdiag, ddiag):
+        return "beyond_gate"
+    return "geometry_mismatch"
+
+
 # ---------------------------------------------------------------- state labels
 
 
@@ -380,16 +406,28 @@ def main():
 
         stats["frames"] += 1
         stats["detections"] += len(detections)
+        for i, det in enumerate(detections):
+            if i not in matches:
+                stats["unmatched:" + unmatched_reason(
+                    det, canonical_state(det), candidates, matches, args.gate_factor)] += 1
         stats["map_candidates"] += len(candidates)
         stats["matched"] += len(matches)
 
         sd = frame["sample_data"]
+        matched_cand_idx = set(matches.values())
         frame_report = {
             "file": path.name,
             "channel": frame["channel"],
             "sample_data_token": sd["token"],
             "n_detections": len(detections),
             "n_map_candidates": len(candidates),
+            # all projected map candidates incl. undetected ones -- the
+            # evaluation layer bins detection coverage by distance from these
+            "candidates": [
+                {"way_id": c["way_id"], "distance_m": c["distance_m"],
+                 "bbox": c["bbox"], "matched": j in matched_cand_idx}
+                for j, c in enumerate(candidates)
+            ],
             "pairs": [],
         }
 
@@ -435,6 +473,8 @@ def main():
                     "projected_box": cand["bbox"] if cand else None,
                     "distance_m": cand["distance_m"] if cand else None,
                     "iou": round(pair_iou, 3),
+                    "unmatched_reason": (None if cand else unmatched_reason(
+                        det, canonical_state(det), candidates, matches, args.gate_factor)),
                 }
             )
         report_frames.append(frame_report)

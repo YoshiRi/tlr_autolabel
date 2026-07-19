@@ -106,6 +106,27 @@ def bulb_flags(elements: list[dict], bulbs: dict | None) -> list[str]:
     return sorted(set(flags))
 
 
+def snap_arrow_dirs(elements: list[dict], bulbs: dict | None):
+    """Snap an arrow's direction to the map bulb layout when the detected
+    direction is infeasible AND the map offers exactly one direction for that
+    color (8-way classifiers often miss by one sector; the map is authoritative
+    for which arrows physically exist). Colors/shapes are never snapped — a
+    color mismatch may equally be a stale map. Returns (elements, snaps)."""
+    if not bulbs or not bulbs["arrows"]:
+        return elements, []
+    snapped, snaps = [], []
+    for e in elements:
+        if e["shape"] == "arrow" and e.get("arrow"):
+            bc = bulb_color(e["color"])
+            if (bc, e["arrow"]) not in bulbs["arrows"]:
+                dirs = sorted({d for c, d in bulbs["arrows"] if c == bc})
+                if len(dirs) == 1:
+                    snaps.append(f"arrow_dir_snapped:{e['arrow']}->{dirs[0]}")
+                    e = dict(e, arrow=dirs[0])
+        snapped.append(e)
+    return snapped, snaps
+
+
 def bulb_weight(elements: list[dict], bulbs: dict | None) -> float:
     """Vote weight: states inconsistent with the map's bulb layout count less."""
     return 0.25 ** len(bulb_flags(elements, bulbs))
@@ -171,13 +192,17 @@ def main():
     for (sample_token, way_id), anns in by_sample_way.items():
         bulbs = bulbs_by_way.get(way_id)
         groups = []
+        snap_flags = []
         for a in anns:
             elements = parse_state(a["attributes"].get("state")
                                    or a["attributes"].get("raw_state")
                                    or a["attributes"].get("detector_signal", ""))
+            elements, snaps = snap_arrow_dirs(elements, bulbs)
+            snap_flags += snaps
             groups.append((elements_key(elements), elements, bulb_weight(elements, bulbs)))
         winner_key, winner_elements, votes, confidence, flags = vote(groups)
         flags = ["cross_camera_" + f if f == "state_disagreement" else f for f in flags]
+        flags += snap_flags
         flags += bulb_flags(winner_elements, bulbs)
         way_obs[(sample_token, way_id)] = {
             "timestamp": sample_ts.get(sample_token),
@@ -233,13 +258,19 @@ def main():
             continue
         observations.sort(key=lambda o: o["timestamp"] or 0)
 
-        # temporal check: single-frame flip inside a stable run
+        # temporal repair: a single-frame flip inside an otherwise-stable run is
+        # corrected by its neighbors (raw value kept in state_original; per-head
+        # states stay untouched). Decided 2026-07-19: repair, don't just flag.
+        before = [o["state"] for o in observations]
         for i in range(1, len(observations) - 1):
-            prev_s, cur, next_s = (observations[i - 1]["state"], observations[i],
-                                   observations[i + 1]["state"])
-            if prev_s == next_s and cur["state"] != prev_s and "unknown" not in (
-                    prev_s, cur["state"]):
-                cur["flags"] = sorted(set(cur["flags"] + ["single_frame_flip"]))
+            prev_s, cur, next_s = before[i - 1], observations[i], before[i + 1]
+            if prev_s == next_s and before[i] != prev_s and "unknown" not in (
+                    prev_s, before[i]):
+                cur["state_original"] = cur["state"]
+                cur["state"] = prev_s
+                cur["elements"] = [dict(e) for e in observations[i - 1]["elements"]]
+                cur["state_source"] = "temporal_fix"
+                cur["flags"] = sorted(set(cur["flags"] + ["single_frame_flip_fixed"]))
 
         # run-length segments for readability
         segments = []
@@ -262,6 +293,8 @@ def main():
                     "state": o["state"],
                     "head_states": o["head_states"],
                     "flags": o["flags"],
+                    # review triage: more flags and less voting agreement first
+                    "review_priority": round(len(o["flags"]) + (1 - o["confidence"]), 3),
                 })
         series.append({
             "regulatory_element_id": rel_id,
@@ -285,7 +318,8 @@ def main():
          "n_series": len(series),
          "n_way_observations": len(way_obs),
          "flagged_observations": sorted(
-             flagged_observations, key=lambda f: (f["regulatory_element_id"], f["timestamp"] or 0)),
+             flagged_observations,
+             key=lambda f: (-f["review_priority"], f["regulatory_element_id"], f["timestamp"] or 0)),
          }, indent=2))
 
     print(f"series (regulatory elements observed): {len(series)}")
