@@ -87,6 +87,54 @@ def load_signal_annotations(path: Path | None) -> dict[str, list[dict]]:
     return grouped
 
 
+def load_re_flags(path: Path | None) -> dict[tuple[str, str], dict]:
+    """{(regulatory_element_id, sample_token): {priority, flags}} from the RE
+    verification report, for injecting cross-camera/temporal review priority."""
+    lookup: dict[tuple[str, str], dict] = {}
+    if path is None or not path.exists():
+        return lookup
+    for fo in load_json(path).get("flagged_observations", []):
+        lookup[(fo["regulatory_element_id"], fo["sample_token"])] = {
+            "priority": fo.get("review_priority", 0.0),
+            "flags": fo.get("flags", []),
+        }
+    return lookup
+
+
+def box_triage(ann: dict, re_flags: dict[tuple[str, str], dict]) -> tuple[float, list[str]]:
+    """Per-box review priority (higher = review sooner) + human-readable reasons.
+    Combines box-local signals with the RE report's cross-camera/temporal flags,
+    so a reviewer can filter/sort straight to what's worth checking."""
+    attrs = ann.get("attributes") or {}
+    priority, reasons = 0.0, []
+
+    if not attrs.get("map_traffic_light_id"):
+        priority += 1.0
+        reasons.append("unmatched")            # real signal missing from map, or a FP?
+
+    try:
+        score = float(attrs.get("detector_score", "") or "nan")
+    except ValueError:
+        score = float("nan")
+    if score == score and score < 0.7:         # not NaN and low
+        priority += (0.7 - score) * 2.0
+        reasons.append(f"low_score:{score:.2f}")
+
+    if (attrs.get("state") or "unknown") == "unknown":
+        priority += 0.5
+        reasons.append("state_unknown")
+
+    sample_token = ann.get("sample_token", "")
+    for re_id in (attrs.get("regulatory_element_id") or "").split(","):
+        hit = re_flags.get((re_id.strip(), sample_token))
+        if hit:
+            priority += hit["priority"]
+            reasons += hit["flags"]
+            break
+
+    return round(priority, 2), sorted(set(reasons))
+
+
 def cvat_image_name(row: dict) -> str:
     path = Path(row["filename"])
     channel = row.get("channel") or (path.parts[1] if len(path.parts) > 1 and path.parts[0] == "data" else "image")
@@ -125,6 +173,10 @@ def add_meta(root_el: ET.Element, task_name: str, size: int) -> None:
             ("detector_score", "text", "", False),
             ("source_type", "select", "manual\nprojected_map\nauto", False),
             ("annotation_uid", "text", "", False),
+            # triage aids (read at export time; ignored on import). Filter in
+            # CVAT with e.g. review_priority > 1.5 to jump to only suspicious boxes.
+            ("review_priority", "number", "0;100;0.01", False),
+            ("flags", "text", "", False),
         ],
     )
     segments = ET.SubElement(task, "segments")
@@ -139,14 +191,17 @@ def add_meta(root_el: ET.Element, task_name: str, size: int) -> None:
     add_text(meta, "dumped", now)
 
 
-def add_box(image_el: ET.Element, ann: dict) -> None:
+def add_box(image_el: ET.Element, ann: dict, re_flags: dict[tuple[str, str], dict]) -> float:
     box = ann.get("box2d") or ann.get("bbox")
     if not box or len(box) != 4:
-        return
+        return 0.0
     label = ann.get("label", "traffic_light")
     if label not in SIGNAL_LABELS:
-        return
-    attrs = ann.get("attributes") or {}
+        return 0.0
+    attrs = dict(ann.get("attributes") or {})
+    priority, reasons = box_triage(ann, re_flags)
+    attrs["review_priority"] = f"{priority:.2f}"
+    attrs["flags"] = ",".join(reasons)
     box_el = ET.SubElement(
         image_el,
         "box",
@@ -166,9 +221,17 @@ def add_box(image_el: ET.Element, ann: dict) -> None:
     for key, value in attrs.items():
         attr = ET.SubElement(box_el, "attribute", {"name": key})
         attr.text = "" if value is None else str(value)
+    return priority
 
 
-def build_xml(task_name: str, rows: list[dict], signal_by_sample_data: dict[str, list[dict]]) -> ET.ElementTree:
+def frame_priority(row: dict, signal_by_sample_data, re_flags) -> float:
+    """Max box review-priority in a frame (for --worst-first / --min-priority)."""
+    return max((box_triage(a, re_flags)[0]
+                for a in signal_by_sample_data.get(row["token"], [])), default=0.0)
+
+
+def build_xml(task_name: str, rows: list[dict], signal_by_sample_data: dict[str, list[dict]],
+              re_flags: dict[tuple[str, str], dict]) -> ET.ElementTree:
     root_el = ET.Element("annotations")
     add_text(root_el, "version", "1.1")
     add_meta(root_el, task_name, len(rows))
@@ -184,7 +247,7 @@ def build_xml(task_name: str, rows: list[dict], signal_by_sample_data: dict[str,
             },
         )
         for ann in signal_by_sample_data.get(row["token"], []):
-            add_box(image_el, ann)
+            add_box(image_el, ann, re_flags)
     indent(root_el)
     return ET.ElementTree(root_el)
 
@@ -212,6 +275,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--start", default=0, type=int)
     parser.add_argument("--count", default=20, type=int, help="Use 0 or a negative value for all remaining frames.")
     parser.add_argument("--signal-ann", type=Path, default=Path("annotation/traffic_signal_2d_ann.json"))
+    parser.add_argument("--re-report", type=Path,
+                        default=Path("build/tl_match/re_verification_report.json"),
+                        help="RE verification report for cross-camera/temporal review priority")
+    parser.add_argument("--min-priority", type=float, default=None,
+                        help="keep only frames whose max box review_priority >= this "
+                             "(builds a focused suspicious-frames review task)")
+    parser.add_argument("--worst-first", action="store_true",
+                        help="order frames by descending review_priority instead of time")
     parser.add_argument("--output", type=Path)
     parser.add_argument("--no-images", action="store_true")
     return parser.parse_args()
@@ -229,17 +300,39 @@ def main() -> None:
         raise SystemExit(f"--start out of range: {args.start}")
     end = len(rows) if args.count <= 0 else min(args.start + args.count, len(rows))
     selected = rows[args.start:end]
-    task_name = f"{args.camera}_{args.start:06d}_{end - 1:06d}"
-    output = args.output or dataset_root / "build/cvat_signal" / f"{task_name}.zip"
 
     signal_path = args.signal_ann
     if not signal_path.is_absolute():
         signal_path = dataset_root / signal_path
     signal_by_sample_data = load_signal_annotations(signal_path)
-    xml_tree = build_xml(task_name, selected, signal_by_sample_data)
+    re_path = args.re_report if args.re_report.is_absolute() else dataset_root / args.re_report
+    re_flags = load_re_flags(re_path)
+
+    if args.min_priority is not None:
+        selected = [r for r in selected
+                    if frame_priority(r, signal_by_sample_data, re_flags) >= args.min_priority]
+        if not selected:
+            raise SystemExit(f"no frames with review_priority >= {args.min_priority}")
+    if args.worst_first:
+        selected = sorted(
+            selected,
+            key=lambda r: -frame_priority(r, signal_by_sample_data, re_flags))
+
+    suffix = ""
+    if args.min_priority is not None:
+        suffix += f"_p{args.min_priority:g}"
+    if args.worst_first:
+        suffix += "_worst"
+    task_name = f"{args.camera}_{args.start:06d}_{end - 1:06d}{suffix}"
+    output = args.output or dataset_root / "build/cvat_signal" / f"{task_name}.zip"
+
+    xml_tree = build_xml(task_name, selected, signal_by_sample_data, re_flags)
     write_zip(dataset_root, output, selected, xml_tree, include_images=not args.no_images)
     print(f"wrote {output}")
-    print(f"frames {args.start}..{end - 1} camera={args.camera} images={len(selected)}")
+    print(f"camera={args.camera} frames_in_task={len(selected)} "
+          f"(from {args.start}..{end - 1}"
+          + (f", min_priority={args.min_priority}" if args.min_priority is not None else "")
+          + (", worst-first" if args.worst_first else "") + ")")
 
 
 if __name__ == "__main__":

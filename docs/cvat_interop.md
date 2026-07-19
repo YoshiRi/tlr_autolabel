@@ -77,8 +77,11 @@
 ```bash
 # 1. Tier B生成(match_traffic_lights.py が v2 属性で出力)
 python3 match_traffic_lights.py --dataset-root <dataset>
-# 2. CVATタスクzip生成(自動アノテーション同梱)
-python3 export_cvat_signal_task.py --dataset-root <dataset> --camera CAM_FRONT --start 0 --count 50
+#    (RE検証レポートも: aggregate_regulatory_signals.py --dataset-root <dataset>)
+# 2. CVATタスクzip生成。--min-priority / --worst-first で「怪しいフレームだけ・
+#    優先度降順」の集中レビュータスクにできる(下記「高速レビュー」参照)
+python3 export_cvat_signal_task.py --dataset-root <dataset> --camera CAM_FRONT \
+    --count 0 --min-priority 1.0 --worst-first
 # 3. CVATへzipをタスクとしてインポート → レビュー(state修正、review_status設定)
 # 4. CVAT XMLエクスポート → 取り込み(検証+正規化)
 python3 import_cvat_signal_annotations.py exported.xml --dataset-root <dataset> \
@@ -87,6 +90,27 @@ python3 import_cvat_signal_annotations.py exported.xml --dataset-root <dataset> 
 
 評価(タスク4)は `review_status in {accepted, fixed}` をGT、`raw_state` を
 autolabel予測として突き合わせる。
+
+## 高速レビュー(bbox オートラベル検証)
+
+エクスポータは各 box に triage 用属性を付与する(export 時に算出、import は無視):
+
+- `review_priority`(number): 高いほど優先。box-local(未マッチ +1.0 / 低スコア
+  `(0.7-score)*2` / state=unknown +0.5)+ RE検証レポートのフラグ由来
+  (`review_priority = n_flags + (1-confidence)`)の合算。
+- `flags`(text): 優先度の理由(`unmatched`, `low_score:0.64`,
+  `cross_head_state_disagreement` 等)。
+
+CVAT 側の速い回し方:
+- **フィルタ**: `review_priority > 1.5` で怪しい box だけ表示 → 全数を見ない。
+- **ショートカット**: `F`/`D` フレーム移動、`Tab` オブジェクト巡回、
+  `review_status` を数字キーで `accepted`/`fixed`/`rejected` に即設定。
+- **一括**: 大半が正しければ select-all → `review_status=accepted`、間違いだけ個別。
+
+`--min-priority T` は「max box priority ≥ T」のフレームだけ、`--worst-first` は
+優先度降順に並べる。両者で「疑わしい順の集中レビュータスク」が作れる
+(c1af6a38 CAM_FRONT: 578→120フレームに縮約、先頭が最重要)。`--no-images` で
+XMLのみの軽量zip。
 
 ## deepen(Tier C、対応表のみ)
 
