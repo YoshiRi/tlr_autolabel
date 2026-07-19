@@ -4,6 +4,10 @@ Autolabel traffic-light recognition over camera images using the ML models
 Autoware itself can run (multiple detector variants), producing labels that are
 usable for **manual correction** (CVAT etc.) and for **evaluation**.
 
+> **Where things stand** — capabilities, goals, and maturity live in
+> [STATUS.md](STATUS.md); remaining tasks in [PLAN.md](PLAN.md). This README is
+> the contract (how it works, IF specs, schemas).
+
 ## Architecture: processing layers
 
 The work is organized in five layers. Lower layers never depend on higher ones;
