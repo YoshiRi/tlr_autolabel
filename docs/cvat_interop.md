@@ -75,6 +75,19 @@
 5. `signal_kind` が空なら `state` から導出。
 6. box新規(annotation_uid空)は token 採番、`source_type=manual` を既定。
 
+## クイックスタート(毎回これだけ)
+
+```bash
+# 全カメラのCVATレビューzipを生成(推論なし、既存ラベルから。数十秒/カメラ)
+./make_cvat_review.sh <dataset_root>
+# 1カメラだけ / 怪しいフレームだけ:
+./make_cvat_review.sh <dataset_root> CAM_FRONT
+MIN_PRIORITY=1.5 ./make_cvat_review.sh <dataset_root> CAM_FRONT
+# Tier Bから作り直す(検出は再利用、地図付与だけやり直す):
+REFRESH=1 ./make_cvat_review.sh <dataset_root>
+```
+zipは `<dataset>/build/cvat_signal/` に出る。CVAT取り込み〜書き戻しは下記。
+
 ## ワークフロー(レビューラウンド)
 
 ```bash
