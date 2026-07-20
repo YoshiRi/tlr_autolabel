@@ -108,9 +108,15 @@ def box_triage(ann: dict, re_flags: dict[tuple[str, str], dict]) -> tuple[float,
     attrs = ann.get("attributes") or {}
     priority, reasons = 0.0, []
 
+    if attrs.get("source_type") == "interpolated":
+        # gap-filled box: worth a glance to confirm the projection, but it's
+        # already map-anchored, so a modest priority.
+        return 0.5, ["interpolated"]
+
     if not attrs.get("map_traffic_light_id"):
         priority += 1.0
-        reasons.append("unmatched")            # real signal missing from map, or a FP?
+        reason = attrs.get("unmatched_reason")
+        reasons.append(f"unmatched:{reason}" if reason else "unmatched")
 
     try:
         score = float(attrs.get("detector_score", "") or "nan")
@@ -171,8 +177,12 @@ def add_meta(root_el: ET.Element, task_name: str, size: int) -> None:
             ("facing", "text", "", False),
             ("raw_state", "text", "", False),
             ("detector_score", "text", "", False),
-            ("source_type", "select", "manual\nprojected_map\nauto", False),
+            ("source_type", "select", "manual\nprojected_map\nauto\ninterpolated", False),
             ("annotation_uid", "text", "", False),
+            # soft association kept for unmatched detections (info not lost)
+            ("map_candidate_id", "text", "", False),
+            ("regulatory_element_id_candidate", "text", "", False),
+            ("unmatched_reason", "text", "", False),
             # triage aids (read at export time; ignored on import). Filter in
             # CVAT with e.g. review_priority > 1.5 to jump to only suspicious boxes.
             ("review_priority", "number", "0;100;0.01", False),

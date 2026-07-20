@@ -47,8 +47,11 @@
 | `facing` | text | `front` `back` / 導出値(未マッチは空) | しない | 灯器面の向き(linestring方向-90°回転の法線、本地図で実証済み)。`back` は筐体裏面の検出 — colored stateなら誤対応疑い |
 | `raw_state` | text | autolabelの元state | しない | 検出器の原文。人手修正後も不変(diff用) |
 | `detector_score` | text | 検出スコア / 空(手動box) | しない | provenance |
-| `source_type` | select | `manual` `projected_map` `auto` / CVAT新規box=`manual`(先頭)、自動生成分は `auto` 値で出力 | しない | 由来の区別 |
+| `source_type` | select | `manual` `projected_map` `auto` `interpolated` / CVAT新規box=`manual`(先頭)、自動生成分は `auto` 値で出力 | しない | 由来の区別 |
 | `annotation_uid` | text | sidecar token | しない | 往復キー。空の新規boxはimportで採番 |
+| `map_candidate_id` | text | 最近傍候補way id / 空 | しない | 未マッチ検出の**軟対応**。誤対応の手掛かり(authoritativeな `map_traffic_light_id` は空のまま) |
+| `regulatory_element_id_candidate` | text | 候補wayのRE / 空 | しない | 同上。未マッチでもRE情報を残す |
+| `unmatched_reason` | text | 未マッチ理由 / 空 | しない | `candidate_taken`/`beyond_gate`/`state_unknown_backside`/`geometry_mismatch`/`no_map_candidate_in_view` |
 
 ### 設計判断の記録
 

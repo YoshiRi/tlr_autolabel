@@ -450,13 +450,25 @@ Fusion repair policies (decided 2026-07-19):
 - **Single-frame flips are repaired**, not just flagged: an observation whose
   neighbors agree on a different state takes the neighbors' state
   (`state_original` + `state_source: temporal_fix` keep the raw value).
-- **No interpolation of unobserved gaps**: an RE not seen at a sample simply
-  has no observation — a signal may change while unobserved, so invented
-  labels would poison training data.
-- **Unmatched detections are classified, not dropped silently**
-  (`unmatched_reason` in `build/tl_match/match_report.json`):
+- **Bounded gap filling** (`--fill-gaps`, default on; decided 2026-07-20,
+  refining the earlier no-interpolation stance): when a regulatory element is
+  matched before and after a short detection dropout (≤ `--max-gap-frames`
+  consecutive missing frames, both sides the same state), the map traffic light
+  is projected into each missing frame as an interpolated box (accurate
+  map-anchored box + RE id, state copied from the bracket). Marked
+  `source_type=interpolated`, `review_status=unchecked` so review/eval can keep
+  or drop them. Only bridges same-state gaps a signal is unlikely to have
+  changed across — not open-ended extrapolation. On c1af6a38: +191 boxes,
+  recovering small/distant signals detection missed. (`raw_state` is empty on
+  these — they are not detections, so they never enter the prediction side of
+  evaluation.)
+- **Unmatched detections keep their info, not dropped silently**: the
+  `unmatched_reason` and the nearest in-view map candidate
+  (`map_candidate_id` / `regulatory_element_id_candidate`) are recorded on the
+  Tier B box (and in `build/tl_match/match_report.json`), so a real signal that
+  failed the geometric match still carries its likely RE for review. Reasons:
   `state_unknown_backside` / `no_map_candidate_in_view` / `candidate_taken` /
-  `beyond_gate` / `geometry_mismatch` — feed these to the review round.
+  `beyond_gate` / `geometry_mismatch`.
 
 ### Tier B schema: `traffic_signal_2d/v2` (per-detection sidecar)
 

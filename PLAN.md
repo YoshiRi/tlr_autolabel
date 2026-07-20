@@ -37,6 +37,10 @@
 - [x] dataset の `build/tlr_autolabel_eval_20260718/` へ退避(full_tiles / full_notiles /
       exports(COCO+CVAT) + 来歴README.txt)。AWML派生は `build/awml_derived/`
 
+### 2.6 未マッチ検出のRE情報保持 + ギャップ補間(2026-07-20 完了、フィードバック#2/#3)
+- [x] 未マッチ検出に `unmatched_reason`+`map_candidate_id`+`regulatory_element_id_candidate` を保持(RE情報を捨てない)
+- [x] `--fill-gaps` 地図投影ギャップ補間(既定on、境界付き)。CVAT export/import・aggregate に反映、往復対応
+
 ### 2.5 CVAT レビューラウンド1 → autolabel 評価(Claude 側トラックで追跡)
 位置づけ確定(2026-07-19、ユーザー決定): GTは常に人力作成。評価層(L6)は
 メトリクス算出基盤 — GT不要指標を常時出し、GT依存指標はレビュー済み
@@ -84,7 +88,7 @@ annotationの存在で自動有効化。
 - [x] 単発フリップ自動修復(12件、`state_original`保持)
 - [x] 矢印方向の地図スナップ(30件: up_right→up 18 + up_left→up 12。不一致 36→24 に減少)
 - [x] 未マッチ分類(`unmatched_reason`: candidate_taken 142 / beyond_gate 53 / 背面23 / 幾何2)
-- [x] 補間しないポリシー明記(README)
+- [x] ~~補間しないポリシー~~ → **境界付きギャップ補間に方針転換**(2026-07-20 ユーザー要望): 同一REの短い検出欠落(≤--max-gap-frames、前後同一state)を地図投影で埋める `--fill-gaps`(既定on)。c1af6a38で+191補間box、全てRE付き `source_type=interpolated`
 - [x] `review_priority` によるレビュー優先順位(re_verification_report)
 - [x] `run_dataset.py` オーケストレータ(複数データセット、L1は--skip-existing再開)
 - [ ] 議論持ち越し: candidate_taken 142 の深掘り(1つの地図TLに複数検出が競合 — 地図側のヘッド数不足か、検出重複か)

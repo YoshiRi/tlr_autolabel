@@ -391,6 +391,13 @@ def parse_args():
                              "Restricts processing to these frames and renders their overlays.")
     parser.add_argument("--vis-dir", default=Path("build/tl_match/vis"), type=Path)
     parser.add_argument("--limit", default=0, type=int, help="Process only the first N files (debug).")
+    parser.add_argument("--fill-gaps", dest="fill_gaps", action="store_true", default=True,
+                        help="Fill temporal detection gaps for a regulatory element seen "
+                             "before and after (default on): project the map traffic light "
+                             "into the missing frames as interpolated boxes.")
+    parser.add_argument("--no-fill-gaps", dest="fill_gaps", action="store_false")
+    parser.add_argument("--max-gap-frames", default=5, type=int,
+                        help="Only bridge gaps up to this many consecutive missing frames.")
     return parser.parse_args()
 
 
@@ -417,6 +424,9 @@ def main():
     report_frames = []
     vis_left = args.vis
     stats = defaultdict(int)
+    # per (channel, way_id) timeline for gap filling: every frame the way is
+    # in view (a projected candidate), with the matched state if any.
+    way_track: dict[tuple[str, str], list[dict]] = defaultdict(list)
 
     for path in files:
         payload = json.loads(path.read_text())
@@ -476,6 +486,22 @@ def main():
             cand = candidates[matches[i]] if i in matches else None
             reg_ids = regulatory_by_way.get(cand["way_id"], []) if cand else []
             pair_iou = iou(det["box_xyxy"], cand["bbox"]) if cand else 0.0
+            # For an unmatched detection, keep the nearest in-view map candidate
+            # as a *soft* association (its way + RE + why the match was rejected),
+            # so the info isn't lost — a reviewer can promote it. The authoritative
+            # map_traffic_light_id stays empty; the _candidate fields carry the hint.
+            reason, cand_way, cand_re = "", "", ""
+            if cand is None and candidates:
+                reason = unmatched_reason(det, canonical_state(det), candidates,
+                                          matches, args.gate_factor)
+                dists = [float(np.linalg.norm(center(det["box_xyxy"]) - center(c["bbox"])))
+                         for c in candidates]
+                nc = candidates[int(np.argmin(dists))]
+                cand_way = nc["way_id"]
+                cand_re = ",".join(regulatory_by_way.get(nc["way_id"], []))
+            elif cand is None:
+                reason = unmatched_reason(det, canonical_state(det), candidates,
+                                          matches, args.gate_factor)
             annotations.append(
                 {
                     "token": token,
@@ -495,6 +521,9 @@ def main():
                         "review_status": "unchecked",
                         "map_traffic_light_id": cand["way_id"] if cand else "",
                         "regulatory_element_id": ",".join(reg_ids),
+                        "map_candidate_id": cand_way,
+                        "regulatory_element_id_candidate": cand_re,
+                        "unmatched_reason": reason,
                         "facing": cand["facing"] if cand else "",
                         "raw_state": raw_state(det),
                         "detector_score": ("" if det.get("detector_score") is None
@@ -520,10 +549,81 @@ def main():
             )
         report_frames.append(frame_report)
 
+        # record every in-view map candidate for gap filling (matched or not)
+        cand_state = {}
+        for i, j in matches.items():
+            cand_state[j] = canonical_state(detections[i])
+        for j, c in enumerate(candidates):
+            way_track[(frame["channel"], c["way_id"])].append({
+                "timestamp": sd["timestamp"],
+                "sample_token": sd["sample_token"],
+                "sample_data_token": sd["token"],
+                "filename": sd["filename"],
+                "proj_box": c["bbox"],
+                "facing": c["facing"],
+                "state": cand_state.get(j),   # None when this candidate was not matched
+            })
+
         if vis_left > 0 and detections:
             draw_overlay(root, frame, detections, candidates, matches,
                          root / args.vis_dir / f"{path.stem}.jpg")
             vis_left -= 1
+
+    # ---- gap filling: bridge short detection dropouts of a regulatory element
+    # that was matched before and after. The map traffic light is projected into
+    # each missing frame (accurate box + RE id), state copied from the bracketing
+    # matched frames when they agree. Marked source_type=interpolated for review.
+    if args.fill_gaps:
+        n_interp = 0
+        for (channel, way_id), track in way_track.items():
+            track.sort(key=lambda r: r["timestamp"])
+            reg_ids = regulatory_by_way.get(way_id, [])
+            i = 0
+            while i < len(track):
+                if track[i]["state"] is None:
+                    i += 1
+                    continue
+                # find the next matched frame; everything strictly between is a gap
+                k = i + 1
+                while k < len(track) and track[k]["state"] is None:
+                    k += 1
+                gap = track[i + 1:k]
+                if (k < len(track) and 0 < len(gap) <= args.max_gap_frames
+                        and track[i]["state"] == track[k]["state"]):
+                    for g in gap:
+                        elems = parse_state(track[i]["state"])
+                        annotations.append({
+                            "token": stable_token(g["sample_data_token"], "interp", way_id),
+                            "sample_token": g["sample_token"],
+                            "sample_data_token": g["sample_data_token"],
+                            "channel": channel,
+                            "filename": g["filename"],
+                            "timestamp": g["timestamp"],
+                            "label": "traffic_light",
+                            "box2d": [float(v) for v in g["proj_box"]],
+                            "occluded": False,
+                            "z_order": 0,
+                            "attributes": {
+                                "state": track[i]["state"],
+                                "signal_kind": signal_kind(elems),
+                                "visibility": "unknown",
+                                "review_status": "unchecked",
+                                "map_traffic_light_id": way_id,
+                                "regulatory_element_id": ",".join(reg_ids),
+                                "map_candidate_id": "",
+                                "regulatory_element_id_candidate": "",
+                                "unmatched_reason": "",
+                                "facing": g["facing"],
+                                "raw_state": "",       # not a detection
+                                "detector_score": "",
+                                "source_type": "interpolated",
+                            },
+                        })
+                        n_interp += 1
+                i = k
+        stats["interpolated"] = n_interp
+        print(f"gap filling: added {n_interp} interpolated boxes "
+              f"(max_gap_frames={args.max_gap_frames})")
 
     # With --frames we only render overlays; don't clobber the full-run tables
     # unless output paths were given explicitly.
