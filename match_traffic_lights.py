@@ -396,9 +396,54 @@ def parse_args():
                              "before and after (default on): project the map traffic light "
                              "into the missing frames as interpolated boxes.")
     parser.add_argument("--no-fill-gaps", dest="fill_gaps", action="store_false")
+    parser.add_argument("--fill-mode", choices=["strict", "bracketed", "all"],
+                        default="bracketed",
+                        help="strict: only same-state interior gaps -> that state. "
+                             "bracketed (default): all interior gaps between two detections "
+                             "-> same-state gives the state, differing gives unknown. "
+                             "all: also fill one-sided leading/trailing in-view frames with unknown.")
     parser.add_argument("--max-gap-frames", default=5, type=int,
                         help="Only bridge gaps up to this many consecutive missing frames.")
     return parser.parse_args()
+
+
+def plan_gap_fills(track, max_gap, mode):
+    """Given one (channel, way) timeline (each entry has state=None when the RE
+    was in view but not detected), decide which missing frames to fill and with
+    what state. Yields (entry, fill_state). source order preserved; caller dedups.
+
+      strict    : interior gap, both sides same state, len<=max_gap -> that state
+      bracketed : + interior gaps whose sides differ (or exceed max_gap)  -> unknown
+      all       : + one-sided leading/trailing in-view frames (<=max_gap) -> unknown
+    """
+    matched = [i for i, e in enumerate(track) if e["state"] is not None]
+    if not matched:
+        return
+    for a, b in zip(matched, matched[1:]):
+        gap = track[a + 1:b]
+        if not gap:
+            continue
+        sa, sb = track[a]["state"], track[b]["state"]
+        if len(gap) <= max_gap:
+            if sa == sb:
+                state = sa                       # othello: both sides agree
+            elif mode in ("bracketed", "all"):
+                state = "unknown"                # sides differ: presence only
+            else:
+                continue                         # strict: leave differing gaps
+            for e in gap:
+                yield e, state
+        elif mode == "all":
+            # long gap: only fill a bounded margin next to each detection
+            for e in gap[:max_gap]:
+                yield e, "unknown"
+            for e in gap[-max_gap:]:
+                yield e, "unknown"
+    if mode == "all":
+        for e in track[max(0, matched[0] - max_gap):matched[0]]:
+            yield e, "unknown"
+        for e in track[matched[-1] + 1:matched[-1] + 1 + max_gap]:
+            yield e, "unknown"
 
 
 def main():
@@ -575,55 +620,51 @@ def main():
     # matched frames when they agree. Marked source_type=interpolated for review.
     if args.fill_gaps:
         n_interp = 0
+        n_unknown = 0
         for (channel, way_id), track in way_track.items():
             track.sort(key=lambda r: r["timestamp"])
             reg_ids = regulatory_by_way.get(way_id, [])
-            i = 0
-            while i < len(track):
-                if track[i]["state"] is None:
-                    i += 1
+            seen = set()
+            for g, state in plan_gap_fills(track, args.max_gap_frames, args.fill_mode):
+                # a frame can be reached from more than one bracket; keep the
+                # first (a concrete state beats a later unknown for the same box)
+                if g["sample_data_token"] in seen:
                     continue
-                # find the next matched frame; everything strictly between is a gap
-                k = i + 1
-                while k < len(track) and track[k]["state"] is None:
-                    k += 1
-                gap = track[i + 1:k]
-                if (k < len(track) and 0 < len(gap) <= args.max_gap_frames
-                        and track[i]["state"] == track[k]["state"]):
-                    for g in gap:
-                        elems = parse_state(track[i]["state"])
-                        annotations.append({
-                            "token": stable_token(g["sample_data_token"], "interp", way_id),
-                            "sample_token": g["sample_token"],
-                            "sample_data_token": g["sample_data_token"],
-                            "channel": channel,
-                            "filename": g["filename"],
-                            "timestamp": g["timestamp"],
-                            "label": "traffic_light",
-                            "box2d": [float(v) for v in g["proj_box"]],
-                            "occluded": False,
-                            "z_order": 0,
-                            "attributes": {
-                                "state": track[i]["state"],
-                                "signal_kind": signal_kind(elems),
-                                "visibility": "unknown",
-                                "review_status": "unchecked",
-                                "map_traffic_light_id": way_id,
-                                "regulatory_element_id": ",".join(reg_ids),
-                                "map_candidate_id": "",
-                                "regulatory_element_id_candidate": "",
-                                "unmatched_reason": "",
-                                "facing": g["facing"],
-                                "raw_state": "",       # not a detection
-                                "detector_score": "",
-                                "source_type": "interpolated",
-                            },
-                        })
-                        n_interp += 1
-                i = k
+                seen.add(g["sample_data_token"])
+                annotations.append({
+                    "token": stable_token(g["sample_data_token"], "interp", way_id),
+                    "sample_token": g["sample_token"],
+                    "sample_data_token": g["sample_data_token"],
+                    "channel": channel,
+                    "filename": g["filename"],
+                    "timestamp": g["timestamp"],
+                    "label": "traffic_light",
+                    "box2d": [float(v) for v in g["proj_box"]],
+                    "occluded": False,
+                    "z_order": 0,
+                    "attributes": {
+                        "state": state,
+                        "signal_kind": signal_kind(parse_state(state)),
+                        "visibility": "unknown",
+                        "review_status": "unchecked",
+                        "map_traffic_light_id": way_id,
+                        "regulatory_element_id": ",".join(reg_ids),
+                        "map_candidate_id": "",
+                        "regulatory_element_id_candidate": "",
+                        "unmatched_reason": "",
+                        "facing": g["facing"],
+                        "raw_state": "",       # not a detection
+                        "detector_score": "",
+                        "source_type": "interpolated",
+                    },
+                })
+                n_interp += 1
+                n_unknown += (state == "unknown")
         stats["interpolated"] = n_interp
-        print(f"gap filling: added {n_interp} interpolated boxes "
-              f"(max_gap_frames={args.max_gap_frames})")
+        stats["interpolated_unknown"] = n_unknown
+        print(f"gap filling [{args.fill_mode}]: added {n_interp} interpolated boxes "
+              f"({n_interp - n_unknown} with state, {n_unknown} presence-only unknown; "
+              f"max_gap_frames={args.max_gap_frames})")
 
     # With --frames we only render overlays; don't clobber the full-run tables
     # unless output paths were given explicitly.
