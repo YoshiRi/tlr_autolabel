@@ -379,9 +379,12 @@ def parse_args():
                              "not written when --frames is used unless given explicitly).")
     parser.add_argument("--max-distance", default=200.0, type=float,
                         help="Max ego-to-signal distance for a map candidate to be projected.")
-    parser.add_argument("--max-incidence-deg", default=75.0, type=float,
+    parser.add_argument("--max-incidence-deg", default=85.0, type=float,
                         help="Drop map candidates seen closer to edge-on than this "
-                             "(unsigned face-normal vs sight-line angle).")
+                             "(unsigned face-normal vs sight-line angle). 85 keeps "
+                             "side-on but still-visible signals; only near-90 (a signal "
+                             "truly seen edge-on) is dropped. The eval layer can filter "
+                             "high-incidence candidates separately via facing_deg.")
     parser.add_argument("--gate-factor", default=1.5, type=float)
     parser.add_argument("--min-score", default=0.5, type=float,
                         help="Ignore detections below this detector_score.")
