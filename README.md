@@ -458,10 +458,18 @@ Fusion repair policies (decided 2026-07-19):
   map-anchored box + RE id, state copied from the bracket). Marked
   `source_type=interpolated`, `review_status=unchecked` so review/eval can keep
   or drop them. Only bridges same-state gaps a signal is unlikely to have
-  changed across — not open-ended extrapolation. On c1af6a38: +191 boxes,
-  recovering small/distant signals detection missed. (`raw_state` is empty on
+  changed across — not open-ended extrapolation. On c1af6a38: recovers small/distant signals detection missed. (`raw_state` is empty on
   these — they are not detections, so they never enter the prediction side of
   evaluation.)
+- **Map-presence backfill** (`--map-fill`, default on; `--map-fill-max-distance`
+  50m, front-facing only): a near signal the detector missed *entirely* still
+  gets an `unknown` box at its projected map position — but only where a real
+  detection of the *same* signal within `--map-fill-window` frames corroborates
+  the projection. Without that guard the map alone drops boxes on occluded /
+  mis-projected empty regions (verified: blind map-fill put boxes on empty sky).
+  Boxes are clipped to the image and dropped if mostly off-frame; position
+  carries the map projection's ~10-20px offset (no detection to snap to), so
+  they are `unknown`/`source_type=map_presence` for review, not final GT.
 - **Unmatched detections keep their info, not dropped silently**: the
   `unmatched_reason` and the nearest in-view map candidate
   (`map_candidate_id` / `regulatory_element_id_candidate`) are recorded on the

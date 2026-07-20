@@ -37,9 +37,14 @@
 - [x] dataset の `build/tlr_autolabel_eval_20260718/` へ退避(full_tiles / full_notiles /
       exports(COCO+CVAT) + 来歴README.txt)。AWML派生は `build/awml_derived/`
 
-### 2.6 未マッチ検出のRE情報保持 + ギャップ補間(2026-07-20 完了、フィードバック#2/#3)
+### 2.6 未マッチ検出のRE情報保持 + ギャップ補間 + 地図プレゼンス埋め(フィードバック#2/#3、2026-07-20)
 - [x] 未マッチ検出に `unmatched_reason`+`map_candidate_id`+`regulatory_element_id_candidate` を保持(RE情報を捨てない)
 - [x] `--fill-gaps` 地図投影ギャップ補間(既定on、境界付き)。CVAT export/import・aggregate に反映、往復対応
+- [x] `--fill-mode` strict/bracketed(既定)/all — オセロ式(前後同一→その値)/異なる→unknown/片側→unknown
+- [x] `--max-distance` 既定 150→**200m**
+- [x] `--map-fill`(既定on、@50m・front・時間裏付け必須): 検出が完全に漏れた近距離信号を地図投影でunknown埋め。
+      裏付けなしのblind版は空/高架に偽箱を出すと判明→`--map-fill-window`で同一信号の近傍検出を必須化。画面外箱はクリップ/除外
+- [x] 検証動画 `make_review_video.py`(緑=検出/シアン[I]=補間/マゼンタ[M]=地図埋め/橙=未マッチ)をリポジトリ追加
 
 ### 2.5 CVAT レビューラウンド1 → autolabel 評価(Claude 側トラックで追跡)
 位置づけ確定(2026-07-19、ユーザー決定): GTは常に人力作成。評価層(L6)は

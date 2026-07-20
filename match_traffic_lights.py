@@ -377,7 +377,8 @@ def parse_args():
     parser.add_argument("--report", default=None, type=Path,
                         help="Diagnostics path (default: build/tl_match/match_report.json; "
                              "not written when --frames is used unless given explicitly).")
-    parser.add_argument("--max-distance", default=150.0, type=float)
+    parser.add_argument("--max-distance", default=200.0, type=float,
+                        help="Max ego-to-signal distance for a map candidate to be projected.")
     parser.add_argument("--max-incidence-deg", default=75.0, type=float,
                         help="Drop map candidates seen closer to edge-on than this "
                              "(unsigned face-normal vs sight-line angle).")
@@ -404,7 +405,38 @@ def parse_args():
                              "all: also fill one-sided leading/trailing in-view frames with unknown.")
     parser.add_argument("--max-gap-frames", default=5, type=int,
                         help="Only bridge gaps up to this many consecutive missing frames.")
+    parser.add_argument("--map-fill", dest="map_fill", action="store_true", default=True,
+                        help="Trust the map (default on): a near, front-facing signal the "
+                             "detector missed entirely still gets an unknown box at its "
+                             "projected map position, for review. Independent of temporal "
+                             "gap filling — catches signals never detected in a run.")
+    parser.add_argument("--no-map-fill", dest="map_fill", action="store_false")
+    parser.add_argument("--map-fill-max-distance", default=50.0, type=float,
+                        help="Only map-fill signals within this distance (near, where the "
+                             "detector should have seen them).")
+    parser.add_argument("--map-fill-window", default=30, type=int,
+                        help="Map-fill a near/front frame only if the SAME signal was "
+                             "actually detected within this many frames — the projection "
+                             "is trusted only where a real detection corroborates it, so we "
+                             "don't invent boxes on occluded/mis-projected empty regions.")
     return parser.parse_args()
+
+
+def clip_box_in_image(box, wh, min_frac=0.5, min_side=6.0):
+    """Clip a projected box to the image; return the clipped box only if the
+    signal is actually reviewable there — most of it inside the frame and not a
+    sliver. Near signals directly overhead/beside the car project off-frame;
+    those must not become annotations. Returns None when unusable."""
+    w, h = wh
+    x0, y0, x1, y1 = box
+    cx0, cy0 = max(0.0, min(x0, x1)), max(0.0, min(y0, y1))
+    cx1, cy1 = min(float(w), max(x0, x1)), min(float(h), max(y0, y1))
+    if cx1 - cx0 < min_side or cy1 - cy0 < min_side:
+        return None
+    orig_area = abs((x1 - x0) * (y1 - y0))
+    if orig_area <= 0 or (cx1 - cx0) * (cy1 - cy0) < min_frac * orig_area:
+        return None
+    return [cx0, cy0, cx1, cy1]
 
 
 def plan_gap_fills(track, max_gap, mode):
@@ -604,8 +636,11 @@ def main():
                 "sample_token": sd["sample_token"],
                 "sample_data_token": sd["token"],
                 "filename": sd["filename"],
+                "channel": frame["channel"],
                 "proj_box": c["bbox"],
+                "wh": image_wh,
                 "facing": c["facing"],
+                "distance": c["distance_m"],
                 "state": cand_state.get(j),   # None when this candidate was not matched
             })
 
@@ -618,53 +653,82 @@ def main():
     # that was matched before and after. The map traffic light is projected into
     # each missing frame (accurate box + RE id), state copied from the bracketing
     # matched frames when they agree. Marked source_type=interpolated for review.
-    if args.fill_gaps:
-        n_interp = 0
-        n_unknown = 0
+    if args.fill_gaps or args.map_fill:
+        # Two backfill sources, merged per (frame, way) with priority so a signal
+        # never gets two boxes: a concrete gap-filled state beats an unknown.
+        #   priority 2 = temporal gap fill with a concrete state
+        #   priority 1 = unknown (temporal presence, or map-presence)
+        # value: (priority, source_type, state, entry)
+        fills: dict[tuple[str, str], tuple] = {}
+
+        def offer(key, priority, source, state, entry):
+            clipped = clip_box_in_image(entry["proj_box"], entry["wh"])
+            if clipped is None:                      # projected off-frame: not reviewable
+                return
+            entry = {**entry, "proj_box": clipped}
+            if key not in fills or priority > fills[key][0]:
+                fills[key] = (priority, source, state, entry)
+
         for (channel, way_id), track in way_track.items():
             track.sort(key=lambda r: r["timestamp"])
+            if args.fill_gaps:
+                for g, state in plan_gap_fills(track, args.max_gap_frames, args.fill_mode):
+                    offer((g["sample_data_token"], way_id),
+                          2 if state != "unknown" else 1, "interpolated", state, g)
+            if args.map_fill:
+                # Near, front-facing frames the detector missed get an unknown box
+                # at the projected position -- but ONLY where a real detection of
+                # the same signal within map_fill_window corroborates the
+                # projection (otherwise the map alone drops boxes on occluded /
+                # mis-projected empty sky). track is time-sorted.
+                matched_idx = [i for i, e in enumerate(track) if e["state"] is not None]
+                for i, e in enumerate(track):
+                    if (e["state"] is None and e["facing"] == "front"
+                            and e["distance"] <= args.map_fill_max_distance
+                            and any(abs(i - m) <= args.map_fill_window for m in matched_idx)):
+                        offer((e["sample_data_token"], way_id), 1,
+                              "map_presence", "unknown", e)
+
+        n_state = n_unknown = n_mappres = 0
+        for (sd_token, way_id), (_prio, source, state, e) in fills.items():
             reg_ids = regulatory_by_way.get(way_id, [])
-            seen = set()
-            for g, state in plan_gap_fills(track, args.max_gap_frames, args.fill_mode):
-                # a frame can be reached from more than one bracket; keep the
-                # first (a concrete state beats a later unknown for the same box)
-                if g["sample_data_token"] in seen:
-                    continue
-                seen.add(g["sample_data_token"])
-                annotations.append({
-                    "token": stable_token(g["sample_data_token"], "interp", way_id),
-                    "sample_token": g["sample_token"],
-                    "sample_data_token": g["sample_data_token"],
-                    "channel": channel,
-                    "filename": g["filename"],
-                    "timestamp": g["timestamp"],
-                    "label": "traffic_light",
-                    "box2d": [float(v) for v in g["proj_box"]],
-                    "occluded": False,
-                    "z_order": 0,
-                    "attributes": {
-                        "state": state,
-                        "signal_kind": signal_kind(parse_state(state)),
-                        "visibility": "unknown",
-                        "review_status": "unchecked",
-                        "map_traffic_light_id": way_id,
-                        "regulatory_element_id": ",".join(reg_ids),
-                        "map_candidate_id": "",
-                        "regulatory_element_id_candidate": "",
-                        "unmatched_reason": "",
-                        "facing": g["facing"],
-                        "raw_state": "",       # not a detection
-                        "detector_score": "",
-                        "source_type": "interpolated",
-                    },
-                })
-                n_interp += 1
-                n_unknown += (state == "unknown")
-        stats["interpolated"] = n_interp
-        stats["interpolated_unknown"] = n_unknown
-        print(f"gap filling [{args.fill_mode}]: added {n_interp} interpolated boxes "
-              f"({n_interp - n_unknown} with state, {n_unknown} presence-only unknown; "
-              f"max_gap_frames={args.max_gap_frames})")
+            annotations.append({
+                "token": stable_token(sd_token, source, way_id),
+                "sample_token": e["sample_token"],
+                "sample_data_token": sd_token,
+                "channel": e.get("channel", ""),
+                "filename": e["filename"],
+                "timestamp": e["timestamp"],
+                "label": "traffic_light",
+                "box2d": [float(v) for v in e["proj_box"]],
+                "occluded": False,
+                "z_order": 0,
+                "attributes": {
+                    "state": state,
+                    "signal_kind": signal_kind(parse_state(state)),
+                    "visibility": "unknown",
+                    "review_status": "unchecked",
+                    "map_traffic_light_id": way_id,
+                    "regulatory_element_id": ",".join(reg_ids),
+                    "map_candidate_id": "",
+                    "regulatory_element_id_candidate": "",
+                    "unmatched_reason": "",
+                    "facing": e["facing"],
+                    "raw_state": "",       # not a detection
+                    "detector_score": "",
+                    "source_type": source,
+                },
+            })
+            n_state += (state != "unknown")
+            n_unknown += (state == "unknown")
+            n_mappres += (source == "map_presence")
+        stats["backfilled"] = len(fills)
+        stats["backfilled_state"] = n_state
+        stats["backfilled_map_presence"] = n_mappres
+        print(f"backfill: {len(fills)} boxes "
+              f"({n_state} gap-filled with state, {n_unknown} unknown; "
+              f"of which {n_mappres} map-presence @<= {args.map_fill_max_distance:g}m front; "
+              f"gap-mode={args.fill_mode}, max_gap_frames={args.max_gap_frames})")
 
     # With --frames we only render overlays; don't clobber the full-run tables
     # unless output paths were given explicitly.
