@@ -414,9 +414,12 @@ def parse_args():
                              "projected map position, for review. Independent of temporal "
                              "gap filling — catches signals never detected in a run.")
     parser.add_argument("--no-map-fill", dest="map_fill", action="store_false")
-    parser.add_argument("--map-fill-max-distance", default=50.0, type=float,
-                        help="Only map-fill signals within this distance (near, where the "
-                             "detector should have seen them).")
+    parser.add_argument("--map-fill-max-distance", default=70.0, type=float,
+                        help="Only map-fill signals within this distance. Corroboration "
+                             "(a real detection of the same signal within --map-fill-window) "
+                             "keeps the projection trustworthy even out to ~70m (verified: "
+                             "boxes sit on the real signal), covering center-far signals the "
+                             "detector drops for seconds while approaching.")
     parser.add_argument("--map-fill-window", default=30, type=int,
                         help="Map-fill a near/front frame only if the SAME signal was "
                              "actually detected within this many frames — the projection "
