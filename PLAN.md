@@ -41,7 +41,7 @@
 - [x] 未マッチ検出に `unmatched_reason`+`map_candidate_id`+`regulatory_element_id_candidate` を保持(RE情報を捨てない)
 - [x] `--fill-gaps` 地図投影ギャップ補間(既定on、境界付き)。CVAT export/import・aggregate に反映、往復対応
 - [x] `--fill-mode` strict/bracketed(既定)/all — オセロ式(前後同一→その値)/異なる→unknown/片側→unknown
-- [x] `--max-distance` 既定 150→**200m**、`--max-incidence-deg` 既定 75→**85°**、`--map-fill-max-distance` 既定 50→**70m**(中央奥の正面信号way2180が59mで検出漏れ→ギャップ36フレーム>max_gap→50m超でmap-fill外、の三重で3.6秒未被覆だった。裏付け付きなら70mでも投影は信号上に正確と実証、全被覆に)(77°の横向き実信号が除外され「明らかにあるのに補完されない」原因だった。85°で復活: マッチ81.4→84.1%、評価側は facing_deg で別途フィルタ可)
+- [x] `--max-distance` 既定 150→**200m**、`--max-incidence-deg` 既定 75→**85°**、`--map-fill-max-distance` 既定 50→70→**130m**(中央奥の正面信号way2180が59mで検出漏れ→ギャップ36フレーム>max_gap→50m超でmap-fill外、の三重で3.6秒未被覆だった。裏付け付きなら遠方でも投影は信号上に正確(123mの次交差点信号で実証)。既定130m=map-presence 722箱。評価は距離ビンで区切る)(77°の横向き実信号が除外され「明らかにあるのに補完されない」原因だった。85°で復活: マッチ81.4→84.1%、評価側は facing_deg で別途フィルタ可)
 - [x] `--map-fill`(既定on、@50m・front・時間裏付け必須): 検出が完全に漏れた近距離信号を地図投影でunknown埋め。
       裏付けなしのblind版は空/高架に偽箱を出すと判明→`--map-fill-window`で同一信号の近傍検出を必須化。画面外箱はクリップ/除外
 - [x] 検証動画 `make_review_video.py`(緑=検出/シアン[I]=補間/マゼンタ[M]=地図埋め/橙=未マッチ)をリポジトリ追加
