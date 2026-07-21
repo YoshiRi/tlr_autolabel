@@ -23,9 +23,43 @@ feeder ─publish(bgr8, stamp.sec=frame#)→ /tlr_autolabel/image
   for 3 subscribers (detector + 2 classifiers) before feeding.
 - `tlr_label_collector.py` — subscribes rois + car/ped traffic_signals, joins by
   `traffic_light_id` within a stamp, writes one JSON per frame (named by source
-  image via frame_map). **Must** subscribe or the classifier (lazy) won't run.
+  image via frame_map) in the **`tlr_autolabel/v1` schema** (identical to the
+  offline pipeline, so the two are directly comparable). **Must** subscribe or
+  the classifier (lazy) won't run. `detector_score` is `null` (not carried on
+  `TrafficLightRoi`); a known, expected difference.
 - `run_ros2_autolabel.sh` — orchestrates: build engines once → launch graph →
   collector → feeder → teardown.
+- `parity_check.py` — L5 acceptance: compare ROS2 output vs offline output on the
+  same frames (see below).
+
+## L5 parity workflow (acceptance: ROS2 == offline int8)
+
+Run the **offline** pipeline and the **live ROS2** pipeline on the SAME frames,
+then compare. Per-frame JSON is named by image stem on both sides, so frames line
+up automatically.
+
+```bash
+# 1) offline (int8 engine detector) — from the repo root
+./run_gpu.sh <IMG_DIR> --out-dir /tmp/par/offline --image-root <DATASET_ROOT> \
+    --detector <...>.engine
+
+# 2) live ROS2 graph on the same images (real terminal; last arg = image_root)
+ros2_pipeline/run_ros2_autolabel.sh <IMG_DIR> /tmp/par/ros2 cam_front 2 0 <DATASET_ROOT>
+
+# 3) parity report
+python3 ros2_pipeline/parity_check.py /tmp/par/offline /tmp/par/ros2 --iou 0.5 --mode both \
+    --out /tmp/par/report.json
+```
+
+`parity_check.py`:
+- **bbox** mode: greedy IoU matching (`--iou`), reports matched / miss
+  (offline-only) / extra (ros2-only), mean IoU, recall/precision/f1 vs offline.
+- **state** mode: on IoU-matched pairs only (state can't be right if the box is
+  wrong), compares the canonical order-independent state via `state_tokens`
+  (legacy `green-arrow(up)` and canonical `green-arrow-up` normalize equal;
+  `yellow`→`amber`). Reports agreement + the mismatching pairs.
+- `both` (default) prints both. L5 passes when bbox f1 and state agreement are
+  ~1.0 on a representative frame set.
 
 ## Run (in a REAL terminal, not an automated sandbox)
 

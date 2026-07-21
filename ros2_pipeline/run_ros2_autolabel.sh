@@ -6,12 +6,15 @@
 # tears everything down. First call builds the TensorRT engines (slow, once).
 #
 # Usage:
-#   run_ros2_autolabel.sh <image_dir> <out_dir> [camera_ns] [rate] [limit]
+#   run_ros2_autolabel.sh <image_dir> <out_dir> [camera_ns] [rate] [limit] [image_root]
+# image_root: make the JSON `image` field relative to this root, to match the
+#   offline run's --image-root (needed for a clean L5 parity comparison).
 # NOTE: no `set -u` -- ROS 2 setup.bash references unbound vars and would abort.
 set -o pipefail
 
 IMG_DIR="${1:?image_dir}"; OUT_DIR="${2:?out_dir}"
-CAM="${3:-autolabel}"; RATE="${4:-3}"; LIMIT="${5:-0}"
+CAM="${3:-autolabel}"; RATE="${4:-3}"; LIMIT="${5:-0}"; IMG_ROOT="${6:-}"
+RUN_ID="ros2-$(date +%Y%m%d-%H%M%S)"
 WS=/home/yoshiri/autoware
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 IMG_TOPIC="/tlr_autolabel/image"
@@ -56,6 +59,7 @@ sleep 12   # let nodes come up & load engines
 echo "[run] starting collector ..."
 python3 "$HERE/tlr_label_collector.py" --out-dir "$OUT_DIR" --frame-map "$MAP" \
   --rois-topic "$ROIS" --car-topic "$CAR" --ped-topic "$PED" \
+  --run-id "$RUN_ID" ${IMG_ROOT:+--image-root "$IMG_ROOT"} \
   > "$OUT_DIR/_collector.log" 2>&1 &
 COLL_PID=$!
 sleep 3
