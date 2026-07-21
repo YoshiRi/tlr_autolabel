@@ -84,9 +84,12 @@ keep them on different models, or pre-build once.
 - **Environment**: the live multi-process ROS 2 graph (DDS + GPU) needs a normal
   interactive shell. It will not run to completion inside a restricted automated
   sandbox (processes get reaped after a few seconds). Run it from a real terminal.
-- **NumPy**: `cv_bridge` prints an `_ARRAY_API not found` warning under NumPy 2.x
-  but still works. If it ever hard-fails, `pip install 'numpy<2'` for the ROS
-  python env.
+- **NumPy**: ROS Humble's `cv_bridge` is built against NumPy 1.x. A NumPy 2.x in
+  the user site (`~/.local`) shadows the system NumPy and **breaks** cv_bridge
+  (`_ARRAY_API not found`; `cvtColor2` fails -> images may publish malformed) —
+  it is not merely a warning. `run_ros2_autolabel.sh` sets `PYTHONNOUSERSITE=1`
+  so the feeder/collector use the system NumPy 1.x (no package changes). If you
+  invoke the feeder/collector directly, prefix them with `PYTHONNOUSERSITE=1`.
 - Engine build is one-time and slow; the detector engine and
   `traffic_light_lamp_recognizer_comlops.engine` are already built under
   `/opt/autoware/mlmodels/`.

@@ -28,6 +28,12 @@ mkdir -p "$OUT_DIR"
 source /opt/ros/humble/setup.bash
 source "$WS/install/setup.bash"
 
+# ROS Humble's cv_bridge is built against NumPy 1.x. A NumPy 2.x in the user site
+# (~/.local) shadows the system NumPy and breaks cv_bridge (`_ARRAY_API not found`,
+# cvtColor2 errors -> images may publish malformed). Ignore the user site so the
+# feeder/collector use the system NumPy 1.x. C++ nodes are unaffected.
+export PYTHONNOUSERSITE=1
+
 # Detector override (for L5 parity: use the SAME detector as the offline run).
 # Default = the 1280 single-class TLRtest engine that the offline pipeline uses,
 # so parity measures implementation (letterbox/decode/int8) not model choice.
