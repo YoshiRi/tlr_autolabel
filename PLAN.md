@@ -132,7 +132,9 @@ annotationの存在で自動有効化。
   GT-ROI feeder(分類器単体評価=検出recallと分離)、production graph harness(RE用、map+localization要)。
 - フェーズ: ①検出器駆動harnessで検出+分類(暫定GTで機構検証、既存parity_check延長)→
   ②分類器単体(GT-ROI投入)→ ③full graphでRE時系列(実RE GT=時系列ツール完成後)。
-- [ ] Phase 1 実装(eval_vs_gt.py + 検出器駆動でノードTier B生成)
+- [x] `eval_vs_gt.py` 実装・検証(2ソース評価器: 検出P/R/IoU距離別 + 状態精度 + 混同行列。
+      機構テスト S960 vs L1920 で動作確認。未レビューGTは非rejected扱い+警告)
+- [ ] Phase 1 残: ros2 harnessでノード出力→Tier B生成→eval_vs_gtでGT突合(ROS環境/bag要)
 ### 3. [hold] AWML 結合テスト(ユーザー指示により保留中)
 - [ ] AWML checkout 上で `create_data_t4dataset.py` を派生データセットに対して実行
 - [ ] `mask: null` / `instance_token: null` の t4dev-kit 受容確認

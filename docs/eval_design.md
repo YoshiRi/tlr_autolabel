@@ -69,9 +69,11 @@ Reuse:
   `evaluate_signals.py` ledgers/profiles.
 
 New:
-- **two-source evaluator** `eval_vs_gt.py`: prediction run × GT run → detection
-  P/R/IoU (level 1), state accuracy + confusion (level 2), RE accuracy (level 3).
-  Emits tidy ledgers like `evaluate_signals.py` so cuts are group-bys.
+- **two-source evaluator** `eval_vs_gt.py` (implemented 2026-07-22): prediction
+  run × GT run → detection P/R/IoU by distance (level 1), state accuracy +
+  element P/R + confusion (level 2); RE level is the remaining extension. Falls
+  back to non-rejected-as-GT with a warning when GT is unreviewed (machinery
+  test). Validated self-test S960(pred) vs L1920(gt).
 - **GT-ROI feeder mode**: publish GT boxes as `rois` for classifier-isolated eval.
 - **full-graph harness** (level 3): launch the production traffic_light pipeline
   on the bag with map + localization, collect the per-RE `TrafficSignalArray`.
