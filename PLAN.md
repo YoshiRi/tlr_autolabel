@@ -102,8 +102,10 @@ annotationの存在で自動有効化。
       30-100mでS960が大差(60-100m: 0.95 vs 0.75)。未マッチ率はS960の方が低い(19% vs 22%)。
       目視検証: S960の追加検出は実在の遠方信号(00565で次交差点の信号2基、L1920は0検出)。
       ただしstate=unknown(遠方で色分類不可)なので検出recall向上であって状態精度ではない。
-- [ ] 要追試: なぜ小モデルが高recall?(960 tilesは7枚>1920の4枚=被覆多、学習日も別)。
-      L960_notiles等でablation、最終判断は人手GT後
+- [x] 2x2 ablation(S960_notiles追加): モデル効果(+0.137)>>タイル効果(+0.06〜0.09)。
+      **S960_notiles 0.556 > L1920_tiles 0.476** → 勝因はモデル、タイルではない。
+      100-150mはS960+tilesのみ到達(0.375)。結論: 検出器をS960に、tilesは遠方用の上乗せ。
+      最終確定は人手GT後(遠方追加分はstate=unknown)
 ### 3. [hold] AWML 結合テスト(ユーザー指示により保留中)
 - [ ] AWML checkout 上で `create_data_t4dataset.py` を派生データセットに対して実行
 - [ ] `mask: null` / `instance_token: null` の t4dev-kit 受容確認
