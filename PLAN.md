@@ -53,7 +53,7 @@
 局所修正・互換・diff用に残すが、大量状態修正の主UIにはしない。
 - [x] `traffic_signal_re_review/v1` 契約を `docs/re_timeline_review.md` に固定
 - [x] `make_re_review_template.py`: `traffic_signal_re/v1` から review JSON ひな形生成
-- [x] `render_re_review_timeline.py`: 静的HTMLでsegment選択→accepted/fixed/rejected→JSON export
+- [x] `render_re_review_timeline.py`: 静的HTMLでsegment選択→代表crop候補切替→accepted/fixed/rejected→JSON export
 - [x] `apply_re_review.py`: review JSON をCVAT import済みTier Bに重ね、`state`/`signal_kind`/`review_status`だけ伝播
 - [x] c1af6a38既存成果物でsmoke test(推論再走なし): accepted仮template 62 decisions → 2376 annotations更新、overlap 0、再aggregate成功
 - [ ] 実レビュー運用: CVATでbbox/visibilityを直した後、RE timeline reviewでstateを確定し、L6 GT指標を初回算出
@@ -94,6 +94,16 @@ annotationの存在で自動有効化。
 - 時系列・共有ヘッドのstateラベリングはCVAT不向き → ユーザーがCodexで補助ツール制作中(L4.5相当)。
   完成したらそのツールとのIF(Tier B / RE timeseries)を整合させる。
 
+### 2.8 モデル/設定比較(2026-07-22、暫定GTベースで初回)
+- [x] `compare_runs.py`: 複数label dirを同一地図でマッチ→距離ビン別 candidate_coverage
+      (GTフリー検出recall proxy)+未マッチ(FP的)+unknown率を並置
+- [x] CAM_FRONT比較(int8, tiles): **驚きの結果 — S960 > L1920**。
+      coverage overall S960 0.65 / L1920+tiles 0.48 / L1920 notiles 0.42。
+      30-100mでS960が大差(60-100m: 0.95 vs 0.75)。未マッチ率はS960の方が低い(19% vs 22%)。
+      目視検証: S960の追加検出は実在の遠方信号(00565で次交差点の信号2基、L1920は0検出)。
+      ただしstate=unknown(遠方で色分類不可)なので検出recall向上であって状態精度ではない。
+- [ ] 要追試: なぜ小モデルが高recall?(960 tilesは7枚>1920の4枚=被覆多、学習日も別)。
+      L960_notiles等でablation、最終判断は人手GT後
 ### 3. [hold] AWML 結合テスト(ユーザー指示により保留中)
 - [ ] AWML checkout 上で `create_data_t4dataset.py` を派生データセットに対して実行
 - [ ] `mask: null` / `instance_token: null` の t4dev-kit 受容確認
