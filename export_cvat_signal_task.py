@@ -15,6 +15,51 @@ from xml.etree import ElementTree as ET
 
 SIGNAL_LABELS = {"traffic_light"}
 
+# Single source of truth for the CVAT label schema (used for both the
+# annotations.xml <meta> and the paste-ready cvat_labels.json). Tuple:
+# (name, input_type, values, mutable). select values = "\n"-joined; the first
+# is the default for newly drawn boxes. Selects render as dropdowns in CVAT.
+# visibility (decided 2026-07-21): the axis is "is the state readable?" —
+#   full=whole signal visible; partial=part hidden/clipped/only-some-lamps but
+#   state still readable; occluded=mostly hidden/off-frame, state not readable
+#   (a real signal is still there); unknown=not reviewed.
+LABEL_ATTRS = [
+    ("state", "text", "", True),
+    ("signal_kind", "select", "vehicle\npedestrian\nother\nunknown", True),
+    ("visibility", "select", "full\npartial\noccluded\nunknown", True),
+    ("review_status", "select", "unchecked\naccepted\nrejected\nfixed", True),
+    ("map_traffic_light_id", "text", "", True),
+    ("regulatory_element_id", "text", "", False),
+    ("facing", "text", "", False),
+    ("raw_state", "text", "", False),
+    ("detector_score", "text", "", False),
+    ("source_type", "select", "manual\nprojected_map\nauto\ninterpolated", False),
+    ("annotation_uid", "text", "", False),
+    # soft association kept for unmatched detections (info not lost)
+    ("map_candidate_id", "text", "", False),
+    ("regulatory_element_id_candidate", "text", "", False),
+    ("unmatched_reason", "text", "", False),
+    # triage aids (read at export time; ignored on import). Filter in CVAT with
+    # e.g. review_priority > 1.5 to jump to only suspicious boxes.
+    ("review_priority", "number", "0;100;0.01", False),
+    ("flags", "text", "", False),
+]
+
+
+def cvat_labels_json() -> str:
+    """The label schema as CVAT's 'Raw' label JSON — paste into a new task's
+    label constructor so every select attribute becomes a dropdown (no typing)."""
+    attrs = []
+    for name, input_type, values, mutable in LABEL_ATTRS:
+        vals = values.split("\n") if input_type == "select" else (
+            values.split(";") if input_type == "number" else [])
+        attrs.append({
+            "name": name, "input_type": input_type, "mutable": mutable,
+            "values": vals,
+            "default_value": vals[0] if input_type == "select" and vals else "",
+        })
+    return json.dumps([{"name": "traffic_light", "attributes": attrs}], indent=2)
+
 
 def load_json(path: Path):
     return json.loads(path.read_text())
@@ -164,31 +209,7 @@ def add_meta(root_el: ET.Element, task_name: str, size: int) -> None:
     # Attribute contract: docs/cvat_interop.md (traffic_signal_2d/v2).
     # select defaults = first line (applies to newly drawn boxes in CVAT).
     labels = ET.SubElement(task, "labels")
-    add_label(
-        labels,
-        "traffic_light",
-        [
-            ("state", "text", "", True),
-            ("signal_kind", "select", "vehicle\npedestrian\nother\nunknown", True),
-            ("visibility", "select", "unknown\nclear\npartial_occluded\nheavy_occluded", True),
-            ("review_status", "select", "unchecked\naccepted\nrejected\nfixed", True),
-            ("map_traffic_light_id", "text", "", True),
-            ("regulatory_element_id", "text", "", False),
-            ("facing", "text", "", False),
-            ("raw_state", "text", "", False),
-            ("detector_score", "text", "", False),
-            ("source_type", "select", "manual\nprojected_map\nauto\ninterpolated", False),
-            ("annotation_uid", "text", "", False),
-            # soft association kept for unmatched detections (info not lost)
-            ("map_candidate_id", "text", "", False),
-            ("regulatory_element_id_candidate", "text", "", False),
-            ("unmatched_reason", "text", "", False),
-            # triage aids (read at export time; ignored on import). Filter in
-            # CVAT with e.g. review_priority > 1.5 to jump to only suspicious boxes.
-            ("review_priority", "number", "0;100;0.01", False),
-            ("flags", "text", "", False),
-        ],
-    )
+    add_label(labels, "traffic_light", LABEL_ATTRS)
     segments = ET.SubElement(task, "segments")
     segment = ET.SubElement(segments, "segment")
     add_text(segment, "id", 0)
@@ -337,11 +358,15 @@ def main() -> None:
 
     xml_tree = build_xml(task_name, selected, signal_by_sample_data, re_flags)
     write_zip(dataset_root, output, selected, xml_tree, include_images=not args.no_images)
+    # paste-ready CVAT label schema (dropdowns for every select attribute),
+    # written once next to the zips.
+    labels_path = output.parent / "cvat_labels.json"
+    labels_path.write_text(cvat_labels_json())
     print(f"wrote {output}")
     print(f"camera={args.camera} frames_in_task={len(selected)} "
           f"(from {args.start}..{end - 1}"
           + (f", min_priority={args.min_priority}" if args.min_priority is not None else "")
-          + ")")
+          + f"); label schema -> {labels_path}")
 
 
 if __name__ == "__main__":

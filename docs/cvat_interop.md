@@ -40,7 +40,7 @@
 |---|---|---|---|---|
 | `state` | text | 正準state文字列 / `unknown` | **する** | GTの信号状態。正準トークンのソート・カンマ結合。importで検証 |
 | `signal_kind` | select | `vehicle` `pedestrian` `other` `unknown` / 導出値 | する | ped要素あり→`pedestrian`、要素あり→`vehicle`、なし→`unknown` で初期化 |
-| `visibility` | select | `clear` `partial_occluded` `heavy_occluded` `unknown` / `unknown` | する | 評価時のフィルタ用 |
+| `visibility` | select | `full` `partial` `occluded` `unknown` / source別に既定 | する | **判定軸=「stateが読めるか」**。full=全体見える / partial=一部隠れ・見切れ・灯火一部だが**読める** / occluded=大半隠れ・枠外で**読めない**(信号は在る) / unknown=未確認。見切れ(truncation)もこの軸に畳む。既定: 検出box=full、map-presence=unknown |
 | `review_status` | select | `unchecked` `accepted` `rejected` `fixed` / `unchecked` | **する** | レビュー状態。評価のGTは `accepted`+`fixed` |
 | `map_traffic_light_id` | text | lanelet2 way id / 自動対応付け結果 | する | 誤対応の修正可。空=対応なし |
 | `regulatory_element_id` | text | relation idカンマ結合 / 導出値 | しない | 表示専用。importで `map_traffic_light_id` から**常に再導出** |
@@ -60,6 +60,12 @@
   ped・amber複合があり、selectでは表現できないか属性爆発する。編集可能な
   分解フィールドを併設すると `state` と二重管理になり乖離する。タイポ対策は
   select ではなく **import時の厳格検証**(下記)で行う。
+- **状態の大量修正はCVATではなくRE timeline reviewで行う。**
+  CVAT上の `state` は局所修正・互換・diff表示のために残すが、複数フレーム/
+  複数カメラ/複数REにまたがる信号状態は
+  `traffic_signal_re_review/v1`(`docs/re_timeline_review.md`)で
+  `signal_group_id` と時間区間に対して管理し、`apply_re_review.py` で Tier B へ
+  伝播する。CVATは bbox / visibility / reject / map id 修正に集中させる。
 - **`regulatory_element_id` は導出値**: 1つのTL wayを複数レーンのregulatory
   elementが共有するため人手管理は誤りやすい。importが地図から再計算する。
 - CVAT実機検証済みのzipレイアウトを維持: `annotations.xml` +
@@ -86,7 +92,12 @@ MIN_PRIORITY=1.5 ./make_cvat_review.sh <dataset_root> CAM_FRONT
 # Tier Bから作り直す(検出は再利用、地図付与だけやり直す):
 REFRESH=1 ./make_cvat_review.sh <dataset_root>
 ```
-zipは `<dataset>/build/cvat_signal/` に出る。CVAT取り込み〜書き戻しは下記。
+zipは `<dataset>/build/cvat_signal/` に出る。同フォルダに `cvat_labels.json` も出力される
+(下記ラベル定義)。CVAT取り込み〜書き戻しは下記。
+
+**ラベル定義は貼り付けるだけ**: 新規タスク作成時、ラベルの "Raw" エディタに
+`cvat_labels.json` の中身を貼る。これで visibility / review_status / signal_kind /
+source_type が全部**ドロップダウン**になる(手入力不要)。
 
 ## ワークフロー(レビューラウンド)
 
@@ -106,6 +117,20 @@ python3 import_cvat_signal_annotations.py exported.xml --dataset-root <dataset> 
 
 評価(タスク4)は `review_status in {accepted, fixed}` をGT、`raw_state` を
 autolabel予測として突き合わせる。
+
+状態レビューをRE timeline側で行う場合は、CVAT XMLをimportして bbox/visibility
+修正をTier Bへ戻した後に:
+
+```bash
+python3 aggregate_regulatory_signals.py --dataset-root <dataset>
+python3 render_re_review_timeline.py --dataset-root <dataset>
+python3 apply_re_review.py --dataset-root <dataset> \
+  --review annotation/traffic_signal_re_review.json \
+  --output annotation/traffic_signal_2d_ann.reviewed.json
+```
+
+この流れでは、CVAT import済みの幾何と `visibility` を保持したまま、RE単位の
+状態決定だけを `state` / `review_status` に反映する。
 
 ## 高速レビュー(bbox オートラベル検証)
 

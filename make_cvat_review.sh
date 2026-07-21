@@ -65,8 +65,9 @@ done
 
 echo
 echo "done. Zips in: $DS/build/cvat_signal/"
-echo "CVAT: new task with the traffic_light label set (docs/cvat_interop.md),"
-echo "  upload the zip as data (images), then Upload annotations -> CVAT 1.1 -> annotations.xml."
+echo "CVAT: new task -> Labels -> Raw editor -> paste build/cvat_signal/cvat_labels.json"
+echo "  (all select attrs become dropdowns). Upload the zip as data (images),"
+echo "  then Upload annotations -> CVAT 1.1 -> annotations.xml."
 echo "  Filter 'review_priority > 1.5' for suspicious boxes; set review_status per box."
 echo "After review, export CVAT 1.1 XML and run:"
 echo "  python3 import_cvat_signal_annotations.py <exported.xml> --dataset-root $DS \\"

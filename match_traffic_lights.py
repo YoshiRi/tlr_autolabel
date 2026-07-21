@@ -601,7 +601,10 @@ def main():
                     "attributes": {
                         "state": canonical_state(det),
                         "signal_kind": signal_kind(parse_state(raw_state(det))),
-                        "visibility": "unknown",
+                        # the detector fired here, so the signal is visible;
+                        # default full and let the reviewer downgrade the few
+                        # partial/occluded ones (saves clicking every box).
+                        "visibility": "full",
                         "review_status": "unchecked",
                         "map_traffic_light_id": cand["way_id"] if cand else "",
                         "regulatory_element_id": ",".join(reg_ids),
@@ -713,7 +716,10 @@ def main():
                 "attributes": {
                     "state": state,
                     "signal_kind": signal_kind(parse_state(state)),
-                    "visibility": "unknown",
+                    # interpolated boxes are bracketed by detections (visible);
+                    # map_presence boxes are detector-missed (small/occluded) so
+                    # leave visibility for the reviewer to decide.
+                    "visibility": "full" if source == "interpolated" else "unknown",
                     "review_status": "unchecked",
                     "map_traffic_light_id": way_id,
                     "regulatory_element_id": ",".join(reg_ids),
