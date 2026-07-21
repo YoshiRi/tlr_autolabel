@@ -491,11 +491,15 @@ def main():
                     help="decode params (anchors etc.) for the CoMLOps darknet detector")
     ap.add_argument("--det-classes", default="TRAFFIC_LIGHT",
                     help="comma-separated class names kept from the CoMLOps detector")
-    # Detector defaults are stricter than the ROS node (score 0.35 / nms 0.7),
-    # because offline autolabeling has no map_based_detector ROI prior to filter
-    # false positives: raise score to drop low-confidence hits, lower nms to merge
-    # duplicate boxes on the same signal more aggressively.
-    ap.add_argument("--det-score-thr", type=float, default=0.5)
+    # Score default matches the ROS node (0.35). An earlier 0.5 was used on the
+    # theory that offline has no map_based_detector ROI prior to filter false
+    # positives -- but L3 (match_traffic_lights) DOES match against the map, so
+    # the map filters FPs after the fact. Measured on CAM_FRONT (L1920+tiles):
+    # dropping 0.5->0.35 recovered +30 real matched signals for only +6 unmatched
+    # (FP-ish), mostly mid-range; going to 0.2 reached coverage 0.60. So run the
+    # detector at node-parity recall and let the map matching sort out FPs.
+    # nms stays tighter than the node's 0.7 to merge duplicate boxes on one signal.
+    ap.add_argument("--det-score-thr", type=float, default=0.35)
     ap.add_argument("--det-nms-thr", type=float, default=0.35)
     ap.add_argument("--cls-score-thr", type=float, default=0.2)
     ap.add_argument("--cls-nms-thr", type=float, default=0.2)

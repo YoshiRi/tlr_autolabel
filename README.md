@@ -12,7 +12,7 @@ evaluate. Training is out of scope; producing training-compatible exports
 
 ## Architecture: processing layers
 
-The work is organized in five layers. Lower layers never depend on higher ones;
+The work is organized in layers. Lower layers never depend on higher ones;
 each layer's output contract is one of the three annotation tiers below.
 
 | layer | role | input -> output | status / where |
@@ -21,29 +21,34 @@ each layer's output contract is one of the three annotation tiers below.
 | **L2 dataset export** | run L1 over a T4 dataset and convert to review/training formats | Tier A JSONs -> COCO / CVAT views | `export_labels.py` (this dir); AWML's training-input spec still to be confirmed |
 | **L3 map enrichment** | attach map context per detection: lanelet2 traffic_light way + regulatory element, via ego pose + calibration; then multi-camera / multi-head fusion into RE time series | Tier A + T4 map/annotation -> Tier B (`traffic_signal_2d/v2` sidecar) -> `traffic_signal_re/v1` | `match_traffic_lights.py`, `aggregate_regulatory_signals.py`, `render_re_timeline.py` (this repo, since 2026-07-19) |
 | **L4 annotation conversion** | convert T4 annotations to external tool formats (CVAT / deepen) and back | Tier B <-> Tier C | CVAT pair in this repo (`export_cvat_signal_task.py` / `import_cvat_signal_annotations.py`; contract `docs/cvat_interop.md`, since 2026-07-19); deepen: other repos, vocab table only |
+| **L4.5 RE timeline review** | edit signal state as intervals on physical signal groups instead of repeating CVAT attributes on every box | Tier B + `traffic_signal_re/v1` + `traffic_signal_re_review/v1` -> reviewed Tier B | `render_re_review_timeline.py` (with representative crop candidates), `make_re_review_template.py`, `apply_re_review.py`; contract `docs/re_timeline_review.md` |
 | **L5 ros2 verification** (option) | feed the same images through actual ROS 2 nodes and compare against L1 results | images -> live pipeline output | `ros2_pipeline/` (quarantined until verified; acceptance = parity with the launched Autoware pipeline, i.e. the int8 engine results) |
 | **L6 evaluation** | metrics engine over enriched labels: emits three tidy ledgers (detections / candidates / lamps) as the analysis substrate, then distance / signal_kind / facing / channel / per-lamp cuts, temporal stability, run-to-run baseline diff; GT metrics activate automatically once reviewed annotations exist (GT is always human-made — this layer never generates it) | Tier B + `traffic_signal_re/v1` (+ reviewed GT) -> `tlr_eval/v2` report + `eval_{detections,candidates,lamps}.jsonl` (schema `docs/eval_records.md`) | `evaluate_signals.py` (this repo, since 2026-07-19) |
 
 Design rules that keep the layers clean:
 
-- **L1 is inference, L2-L4 are pure conversion.** Anything after L1 must be
+- **L1 is inference, L2-L4.5 are pure conversion/review composition.** Anything after L1 must be
   re-runnable without re-inference (labels are regenerated from stored JSON).
 - **L1 is model- and dataset-agnostic.** Detector variants are interchangeable
   (`--detector`, auto-detected family); T4 linkage (`sample_data_token` etc.)
   is an optional enrichment via `--t4-dataset`, never a dependency.
 - **L3 adds fields, it does not transform.** Regulatory-element info is
   attached to Tier B records; Tier A files stay untouched.
+- **L4.5 edits state over time, not geometry.** CVAT owns per-frame boxes,
+  visibility, rejections, and map-id fixes; RE timeline review owns state
+  intervals and propagates them back into Tier B without changing geometry.
 - **L5 is out of the dependency graph.** Nothing in L1-L4 may import from or
   require `ros2_pipeline/`.
 - **L6 is pure analysis.** It only reads L3 outputs (and reviewed GT when
   present); it never writes annotations and never re-runs inference.
 
-## Annotation tiers (3 specs)
+## Annotation tiers (3 specs + review companion)
 
 | tier | spec | scope | consumers |
 |------|------|-------|-----------|
 | **A** | `tlr_autolabel/v1` (frozen 2026-07-18, schema below) | raw autolabel per frame; model/dataset-agnostic; full lamp detail + provenance | L2/L3, quality review |
 | **B** | `traffic_signal_2d/v2` (T4 sidecar table; v1 read-fallback: `detector_signal` -> `raw_state`) | dataset-scoped: per-signal canonical `state`, `map_traffic_light_id`, `regulatory_element_id`, review fields (`review_status`, `signal_kind`, `visibility`), provenance (`raw_state`, `detector_score`, `source_type`) — attribute contract in `docs/cvat_interop.md` | training (AWML — verify), L4, RE-level aggregation |
+| **B-review** | `traffic_signal_re_review/v1` | human decisions over physical signal groups (`member_ways`) and time intervals; applies to Tier B by propagation | L4.5, L6 GT preparation |
 | **C** | CVAT XML / deepen | external annotation tools, human correction rounds | annotators; CVAT contract `docs/cvat_interop.md`, deepen owned by converter repo |
 
 Rules across tiers: the **canonical state vocabulary (lamp tokens
@@ -277,7 +282,7 @@ autolabeling has no map_based_detector ROI prior to filter false positives):
 
 | flag | default | effect |
 |------|---------|--------|
-| `--det-score-thr` | 0.5 | drop low-confidence detections (node uses 0.35) |
+| `--det-score-thr` | 0.35 | node-parity recall; L3 map matching filters FPs (was 0.5 — that missed mid-range signals) |
 | `--det-nms-thr` | 0.35 | IoU-NMS; lower = merge overlaps harder (node uses 0.7). Plus a containment rule merges nested tight/whole-signal duplicates, keeping the higher-score box |
 | `--min-box` | 8 | drop detections whose shorter side < N px |
 | `--drop-unknown` | off | drop signals whose classifier found no lamp (recommended for state autolabeling) |
@@ -434,6 +439,14 @@ python3 aggregate_regulatory_signals.py --dataset-root <dataset>
 
 # 3) interactive HTML timeline (one row per head group, flags marked)
 python3 render_re_timeline.py --dataset-root <dataset>
+
+# 4) optional richer state review: edit state by physical signal group/time.
+#    The HTML also writes crop candidates under build/tl_match/re_review_assets/.
+python3 render_re_review_timeline.py --dataset-root <dataset>
+python3 make_re_review_template.py --dataset-root <dataset>
+python3 apply_re_review.py --dataset-root <dataset> \
+    --review annotation/traffic_signal_re_review.json \
+    --output annotation/traffic_signal_2d_ann.reviewed.json
 ```
 
 The lanelet2 `light_bulbs` color tags use `yellow`; canonical `amber` is
@@ -550,6 +563,56 @@ Written by `aggregate_regulatory_signals.py` to
   ]
 }
 ```
+
+### `traffic_signal_re_review/v1` (editable state review)
+
+Written by `make_re_review_template.py` or exported from
+`render_re_review_timeline.py`, then applied by `apply_re_review.py`. This file
+is intentionally a sidecar: it records human decisions over physical signal
+groups and time intervals without overwriting the CVAT/Tier B geometry edits.
+
+Physical signal groups are keyed by the lanelet2 `traffic_light` member ways,
+not by a single regulatory element, because multiple RE relations can share the
+same heads:
+
+```jsonc
+{
+  "schema_version": "traffic_signal_re_review/v1",
+  "source_timeseries": "annotation/traffic_signal_re_timeseries.json",
+  "groups": [
+    {
+      "signal_group_id": "ways:2180,2182",
+      "member_ways": ["2180", "2182"],
+      "regulatory_element_ids": ["10360", "10362"],
+      "decisions": [
+        {
+          "start_sample_token": "...",
+          "end_sample_token": "...",
+          "start_timestamp": 1783325718047571,
+          "end_timestamp": 1783325720947572,
+          "state": "green-arrow-up,red-circle",
+          "review_status": "fixed",
+          "source": "manual_timeline_review",
+          "note": ""
+        }
+      ]
+    }
+  ]
+}
+```
+
+Application rules:
+
+- `accepted` / `fixed` decisions overwrite Tier B `attributes.state`, derive
+  `signal_kind`, and set `review_status`.
+- `rejected` decisions set only `review_status=rejected`.
+- `unchecked` decisions are retained in review JSON but are not applied.
+- `box2d`, `visibility`, `map_traffic_light_id`, `raw_state`,
+  `detector_score`, and `source_type` are never changed by this layer.
+
+The normal human loop is: CVAT first for bbox/visibility/reject/map-id fixes,
+then re-run aggregation, then RE timeline review for state intervals, then
+`apply_re_review.py` to produce the reviewed Tier B sidecar consumed by L6.
 
 Flag vocabulary (review triage; also summarized in
 `build/tl_match/re_verification_report.json`):
