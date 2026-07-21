@@ -1,9 +1,9 @@
 # TLR autolabel — plan / remaining tasks
 
 作業計画の単一管理ファイル。タスクの追加・完了・方針変更はここを更新する。
-設計の契約は README.md 冒頭(5階層 / Tier A-C)。矛盾時は README を正とする。
+設計の契約は README.md 冒頭(処理層 / Tier A-C + B-review)。矛盾時は README を正とする。
 
-最終更新: 2026-07-19
+最終更新: 2026-07-21
 
 ## ✅ 完了(日付順)
 
@@ -23,6 +23,7 @@
 | 07-19 | **8倍高速化**: 非連続配列 tofile(399ms/パス)修正 + yolox デコードのベクトル化。6.4s → 0.78s/frame(出力ビット一致) |
 | 07-19 | L1 の新モデル試走対応: 多クラス yolox 一般化、動的shape/未知ファミリの明示エラー、プリセット env var 展開、README に flexibility contract(tiles はオプトイン) |
 | 07-19 | **L4 CVAT往復を当リポジトリへ移植 + 契約v2**: 属性契約 `docs/cvat_interop.md`(`traffic_signal_2d/v2`: 正準state text + signal_kind/visibility/review_status + raw_state/detector_score。circle/arrow select分解は不採用=同時多方向矢印・二重管理回避)。importはfail-loud検証(stateトークン文法・way id実在・RE id再導出)。往復ロスレス(CAM_FRONT 299/299)、aggregator v2回帰OK。dataset側の旧ペア・旧specはMOVED注記済み(削除可) |
+| 07-21 | **L4.5 RE timeline review基盤**: CVATのbbox/visibility修正と分離し、信号状態を物理信号グループ(`member_ways`)×時系列区間でレビューする `traffic_signal_re_review/v1` を追加。`render_re_review_timeline.py`(静的HTML編集UI)、`make_re_review_template.py`(ひな形生成)、`apply_re_review.py`(Tier Bへ伝播) + `docs/re_timeline_review.md`。c1af6a38既存autolabelで smoke: 24 RE→8 group、62 segment、2376/2793 annotationへaccepted伝播、再aggregate成功 |
 
 ## 📋 残タスク(実行順)
 
@@ -46,6 +47,17 @@
       裏付けなしのblind版は空/高架に偽箱を出すと判明→`--map-fill-window`で同一信号の近傍検出を必須化。画面外箱はクリップ/除外
 - [x] 検証動画 `make_review_video.py`(緑=検出/シアン[I]=補間/マゼンタ[M]=地図埋め/橙=未マッチ)をリポジトリ追加
 
+### 2.7 RE timeline review layer(2026-07-21)
+位置づけ: CVATはbbox/visibility/reject/map idの編集に集中させ、灯火状態は
+物理信号グループ×時系列区間で一括レビューする。CVAT attribute `state` は
+局所修正・互換・diff用に残すが、大量状態修正の主UIにはしない。
+- [x] `traffic_signal_re_review/v1` 契約を `docs/re_timeline_review.md` に固定
+- [x] `make_re_review_template.py`: `traffic_signal_re/v1` から review JSON ひな形生成
+- [x] `render_re_review_timeline.py`: 静的HTMLでsegment選択→accepted/fixed/rejected→JSON export
+- [x] `apply_re_review.py`: review JSON をCVAT import済みTier Bに重ね、`state`/`signal_kind`/`review_status`だけ伝播
+- [x] c1af6a38既存成果物でsmoke test(推論再走なし): accepted仮template 62 decisions → 2376 annotations更新、overlap 0、再aggregate成功
+- [ ] 実レビュー運用: CVATでbbox/visibilityを直した後、RE timeline reviewでstateを確定し、L6 GT指標を初回算出
+
 ### 2.5 CVAT レビューラウンド1 → autolabel 評価(Claude 側トラックで追跡)
 位置づけ確定(2026-07-19、ユーザー決定): GTは常に人力作成。評価層(L6)は
 メトリクス算出基盤 — GT不要指標を常時出し、GT依存指標はレビュー済み
@@ -59,7 +71,7 @@ annotationの存在で自動有効化。
       任意group-byで切れる。スキーマ `docs/eval_records.md`。GT到着で正答率も同次元でスライス可。
       知見: 歩行者ヘッドはmatch 97%だがIoU中央値~0.12(`red_green` way形状と位置は合うが範囲不一致→ped専用投影チェック候補)
 - [ ] [hold] 人手レビュー実施(CVAT環境が手元にない間は保留。zip・ガイドは生成済み)
-- [ ] [hold] CVATでのGT作成を楽にする仕組み(プラグイン/自動アノテーションAPI等)の要否 — CVATプラグイン知識がなく判断保留。判断材料が必要になったら CVAT serverless(nuclio)/SDK の調査から
+- [x] CVATでのGT作成を楽にする仕組みの初期解: CVATプラグインに寄せず、L4.5 RE timeline review sidecar/UIを追加。CVATはbbox/visibility、timelineはstate区間、`apply_re_review.py`で統合
 - [x] 地図候補の妥当性フィルタ(2026-07-19、カバレッジ過小疑いへの対応):
       ①エッジオン除外 — 入射角(符号なし法線vs視線)>75°を候補から除外(実測: 70-80°でmatched率12%、80-90°で6%に崩落)。`--max-incidence-deg`
       ②投影サイズ<8px(検出器min-box)は評価で「too_small」に分離しカバレッジ分母から除外
@@ -73,6 +85,14 @@ annotationの存在で自動有効化。
       100-150m 14%(残余因 = 遮蔽・画端・真の検出漏れ)
 - [ ] レビュー取り込み後: `evaluate_signals.py` 再実行でGT指標(距離別正答率・要素P/R・FP/FN)を確認
 - 完了条件: レビュー済みTier Bと評価レポート(GTブロック有効)が dataset `build/` に存在
+
+### 2.7 暫定GT運用への移行(2026-07-21 ユーザー決定)
+- [x] 現状ベスト出力を凍結: `build/gt_provisional_20260721/`(Tier B + RE + match_report + MANIFEST)
+- 位置づけ: **固定ベースライン**(evaluate_signals --baseline でのrun/モデル比較用)。人手未レビュー
+  (review_status=unchecked)なので「自己整合の基準」であって精度GTではない。
+- 注意: 予測=autolabel自身を暫定GT=autolabel自身と比べると自明に一致 → 用途は「別設定/別モデルとの差分」。
+- 時系列・共有ヘッドのstateラベリングはCVAT不向き → ユーザーがCodexで補助ツール制作中(L4.5相当)。
+  完成したらそのツールとのIF(Tier B / RE timeseries)を整合させる。
 
 ### 3. [hold] AWML 結合テスト(ユーザー指示により保留中)
 - [ ] AWML checkout 上で `create_data_t4dataset.py` を派生データセットに対して実行
