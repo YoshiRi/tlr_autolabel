@@ -122,6 +122,17 @@ annotationの存在で自動有効化。
 - [x] **既定を --det-score-thr 0.5→0.35 に変更**。根拠だった「map prior無し」は誤り(L3で地図マッチ=FPフィルタ)。
       低閾値のFPは「未マッチ検出」として仕分けられGT汚染しない。
 - [ ] 暫定GT(0.5生成)は据え置き。次回全カメラ再ラベル時に0.35で更新
+### 2.11 実ノード評価の設計(2026-07-22)
+- [x] 設計文書 `docs/eval_design.md`: 実ROSノードを3階層で評価
+      (①ROI検出 ②分類 ③マッチ+Merge後のRE)、GTは本repoのTier B+RE timeseries。
+- 原理: ノード出力を正準形式(tlr_autolabel/v1 + RE)に変換 → オフラインと同じ
+  L3/L6エンジンでGTと突合(評価器はソース非依存)。ros2_pipeline collector が既に
+  tlr_autolabel/v1 を吐くので流用可。
+- 新規要素: 2ソース評価器 `eval_vs_gt.py`(pred run × GT run → 検出P/R・状態精度・RE精度)、
+  GT-ROI feeder(分類器単体評価=検出recallと分離)、production graph harness(RE用、map+localization要)。
+- フェーズ: ①検出器駆動harnessで検出+分類(暫定GTで機構検証、既存parity_check延長)→
+  ②分類器単体(GT-ROI投入)→ ③full graphでRE時系列(実RE GT=時系列ツール完成後)。
+- [ ] Phase 1 実装(eval_vs_gt.py + 検出器駆動でノードTier B生成)
 ### 3. [hold] AWML 結合テスト(ユーザー指示により保留中)
 - [ ] AWML checkout 上で `create_data_t4dataset.py` を派生データセットに対して実行
 - [ ] `mask: null` / `instance_token: null` の t4dev-kit 受容確認
