@@ -170,7 +170,7 @@ class Collector(Node):
                 "detector_score": None,   # not available on the ROS path
                 "box_xyxy": box,
                 "lamps": lamps,
-                "signal": ",".join(sorted(l["label"] for l in named)) if named else "unknown",
+                "state": ",".join(sorted(l["label"] for l in named)) if named else "unknown",
             })
         out = {
             "schema_version": SCHEMA_VERSION,

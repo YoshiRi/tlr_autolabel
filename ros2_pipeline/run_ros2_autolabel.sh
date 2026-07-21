@@ -28,6 +28,13 @@ mkdir -p "$OUT_DIR"
 source /opt/ros/humble/setup.bash
 source "$WS/install/setup.bash"
 
+# Detector override (for L5 parity: use the SAME detector as the offline run).
+# Default = the 1280 single-class TLRtest engine that the offline pipeline uses,
+# so parity measures implementation (letterbox/decode/int8) not model choice.
+# Set DET_PKG_PATH="" to fall back to the launch default (960 car+ped detector).
+DET_PKG_PATH="${DET_PKG_PATH-/home/yoshiri/autoware_data/TLRtest/traffic_light_detector}"
+DET_PARAM="${DET_PARAM-${DET_PKG_PATH:+$DET_PKG_PATH/ml_package_yolox.1280x1280_20260703_best.param.yaml}}"
+
 LAUNCH_ARGS=(
   autoware_ml_model_launchers tlr_detect_and_classifier.launch.xml
   camera_namespace:="$CAM"
@@ -39,6 +46,8 @@ LAUNCH_ARGS=(
   car_classifier_model_name:=traffic_light_lamp_recognizer_comlops.onnx
   pedestrian_classifier_type:=1
 )
+[ -n "$DET_PKG_PATH" ] && LAUNCH_ARGS+=(detector_ml_package_path:="$DET_PKG_PATH")
+[ -n "$DET_PARAM" ] && LAUNCH_ARGS+=(detector_param_path:="$DET_PARAM")
 # Note: car uses LampRecognizer (YOLOX classifier, type 2, lamp_recognizer onnx);
 # pedestrian stays on the CNN model (type 1, prebuilt engine). Pointing both at
 # the same lamp onnx makes them race to build the SAME engine file on one GPU.

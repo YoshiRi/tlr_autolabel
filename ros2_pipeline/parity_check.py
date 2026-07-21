@@ -38,8 +38,9 @@ def iou(a, b):
 
 
 def state_key(sig):
-    """Canonical order-independent state string for a v1 signal ('' if no state)."""
-    return elements_key(parse_state(sig.get("signal", "")))
+    """Canonical order-independent state string for a v1 signal ('' if no state).
+    v1 uses `state`; older sidecars used `signal` -- accept either."""
+    return elements_key(parse_state(sig.get("state", sig.get("signal", ""))))
 
 
 def greedy_match(off, ros, thr):
