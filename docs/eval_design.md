@@ -40,6 +40,40 @@ is fine for "offline vs its own review" but not for "node vs GT".
 | **2 classification** | per-ROI state — `.../classification/{car,pedestrian}/traffic_signals` (keyed by traffic_light_id) | reviewed Tier B `state` (legible only: visibility full/partial) | frame + matched ROI (or GT ROI) | state accuracy given a correct ROI; color/shape/arrow confusion; by distance/visibility. **decoupled from detection** |
 | **3 RE / merge** | final per-RE `TrafficSignalArray` after map assoc + multi-camera fusion + arbiter (keyed by regulatory_element_id) | RE timeseries GT (`traffic_signal_re/v1`, human-reviewed via the time-series tool) | regulatory_element_id + timestamp (nearest) | per-RE state accuracy over time, state-change latency, flip/stability vs GT segments |
 
+
+## Bag-based flow (chosen 2026-07-22)
+
+The user runs the `autoware_ml_model_launchers` detect+classify launcher over a
+rosbag and hands over a **bag containing the node output**. We evaluate that bag
+against our GT (levels 1 & 2). Level 3 (per-RE, final `/traffic_signals`) is
+already covered by tier4's `driving_log_replayer_v2` traffic_light use case
+(topic `/perception/traffic_light_recognition/traffic_signals`,
+`tier4_perception_msgs/TrafficSignalArray`, GT from t4dataset, ±75ms temporal
+match, per-label TP/FP/FN + confusion) — we align our temporal tolerance to it.
+
+Flow:
+```
+node bag ──bag_to_labels.py──► tlr_autolabel/v1 (roi box + classified state,
+   (TrafficLightRoiArray            time-aligned to GT keyframes, ±75ms)
+    + TrafficLightArray)              │
+                                      ▼  match_traffic_lights.py
+                                 node Tier B
+                                      │  eval_vs_gt.py --gt <reviewed GT>
+                                      ▼
+                    detection P/R/IoU by distance (level 1) +
+                    classification state accuracy + confusion (level 2)
+```
+
+- `bag_to_labels.py` (built 2026-07-22): reads `*/detection/rois`
+  (TrafficLightRoiArray) + `*/classification/traffic_signals`
+  (TrafficLightArray), joins roi<->signal by `traffic_light_id` per stamp, maps
+  `TrafficLightElement` enums to canonical tokens (validated:
+  RED+CIRCLE / GREEN+UP_ARROW -> `green-arrow-up,red-circle`; ped -> `*-ped`;
+  SOLID_OFF -> dropped), aligns each stamp to the nearest camera keyframe within
+  `--time-tol-ms` (75). Needs a sourced ROS 2 humble + the autoware workspace.
+- match by box IoU (detector-driven ROI ids are not map RE ids), so levels 1 & 2
+  need no map/localization. Level 3 = driving_log_replayer_v2.
+
 ## Two harness modes
 
 - **detector-driven** (current `ros2_pipeline/` harness): detector finds ROIs →
