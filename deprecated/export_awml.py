@@ -33,7 +33,7 @@ import os
 import yaml
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-VOCAB_PATH = os.path.join(HERE, "configs", "state_vocab", "db_tlr.yaml")
+VOCAB_PATH = os.path.join(HERE, "..", "configs", "state_vocab", "db_tlr.yaml")
 
 
 def load_vocab():
@@ -69,6 +69,9 @@ def token_of(*parts):
 
 
 def main():
+    import sys
+    print("DEPRECATED: export_awml.py is superseded by to_object_ann.py + t4devkit AWML tooling "
+          "(see deprecated/README.md). Running anyway.", file=sys.stderr)
     ap = argparse.ArgumentParser()
     ap.add_argument("labels_dir", help="directory of tlr_autolabel v1 per-image JSONs")
     ap.add_argument("--t4-dataset", required=True, help="source T4 dataset root")

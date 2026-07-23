@@ -34,6 +34,11 @@ from xml.etree import ElementTree as ET
 # Token parsing is shared with the rest of the repo (canonical + legacy forms).
 from state_tokens import bulb_color, elements_key, parse_state
 
+# box shorter side (px) at/above which a lamp read is treated as fully reliable;
+# smaller boxes get proportionally less vote weight (cross-camera resolution
+# weighting, e.g. wide vs telephoto observing the same head — see way fusion).
+SIZE_REF_PX = 30.0
+
 
 # ---------------------------------------------------------------- lanelet2 map
 
@@ -200,6 +205,17 @@ def main():
             elements, snaps = snap_arrow_dirs(elements, bulbs)
             snap_flags += snaps
             weight = bulb_weight(elements, bulbs)
+            # cross-camera resolution weighting: a head seen by both a wide and
+            # a telephoto (e.g. CAM_FRONT vs CAM_FRONT_FAR) at distance gives a
+            # ~10px vs ~44px box for the same signal. More pixels on the lamp =
+            # more reliable classification, so the bigger box should win a
+            # disagreement. Saturates at SIZE_REF_PX (above it, both reads are
+            # reliable and near-field behaviour is unchanged); floored so a tiny
+            # box still votes a little rather than abstaining.
+            box = a.get("box2d")
+            if box:
+                min_side = min(box[2] - box[0], box[3] - box[1])
+                weight *= min(max(min_side / SIZE_REF_PX, 0.2), 1.0)
             # a colored reading through the housing's back is physically
             # impossible -> almost certainly a misassociation; flag + demote
             if elements and a["attributes"].get("facing") == "back":

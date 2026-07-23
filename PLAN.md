@@ -148,7 +148,8 @@ annotationの存在で自動有効化。
 - [x] `to_object_ann.py` 実装・検証: Tier A(autolabel-dir)/Tier A'(sidecar)両対応 → 標準object_ann+category+attribute+map assoc。
       ad266d7c(地図なし): 787箱/map assoc 0(Optional欠落)。c1af6a38(地図あり): 3323箱/2854 assoc。キーは標準7個に厳密一致。
 - [x] 実GT初測定(ad266d7c 人手object_ann 518箱 vs L1): 検出 P=0.58 R=0.85、状態精度0.75、最大誤り=分類器のX→unknown
-- [ ] export_awml/export_labels のdeprecated化、README/STATUSのレイヤ改訂
+- [x] export_awml/export_labels を `deprecated/` へ移動(実行時警告+deprecated/README、参照ゼロ確認)。
+      deepen.yaml=reference-only注記、doc参照をto_object_annに修正。README/STATUSのレイヤ改訂も反映
 - [x] unknown誤りの深掘り(実GT ad266d7c): 105件を分解 = 75件は極小信号(中央値10px、分類器が灯火を読めず=解像度限界)、
       29件は down系矢印(db_tlrに無く unknown化)。down_left→left/down_right→right をdb_tlrに追加 → 状態精度 0.751→0.780。
       残る誤りは①極小信号のX→unknown(green44/red20=解像度限界、系統的)②分類器の矢印左右取り違え(red→red_left 9)。

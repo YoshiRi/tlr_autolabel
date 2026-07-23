@@ -4,7 +4,7 @@
 (毎コミットではない)。役割分担: **能力・ゴール・成熟度はここだけ**、タスク
 (動詞)は PLAN、契約・IF・層は README、横断事実はプロジェクトメモリ。
 
-最終レビュー: 2026-07-19
+最終レビュー: 2026-07-23
 
 ## North Star
 
@@ -54,12 +54,14 @@
 | L3 地図マッチ(lanelet2 投影+Hungarian) | G2 | works-here | ○ 84.7%マッチ(6カメラ) |
 | L3 融合+自動補正(フリップ修復/方向スナップ/未マッチ分類) | G2 | works-here | ○ |
 | L3 タイムライン可視化(レビュー優先度付き) | G2 | works-here | ○ build/tl_match/re_timeline.html |
-| L4 CVAT 往復(人手レビュー→GT化) | G1/G2 | works-here | ○ ロスレス 299/299。だが実レビュー未実走 |
+| L4 CVAT 往復(人手レビュー→GT化) | G1/G2 | works-here | ○ ロスレス 299/299。bbox/visibility/reject/map id修正の主経路 |
+| L4.5 RE timeline review(状態区間→Tier B伝播) | G1/G2 | works-here | ○ 代表crop候補付きHTML。c1af6a38 smoke: 24 RE→8 group、62 segment、2376 annotation更新、再aggregate成功。実GTレビューは未 |
 | L2 COCO / CVAT 出力 | G4 | works-here | ○ |
 | L2 AWML 派生データセット | G4 | experimental | △ 互換手段。実 create_data で未検証(PLAN 3, 優先度低) |
 | L4 deepen 変換 | G4 | experimental | △ 契約表のみ・変換は他リポジトリ・未検証 |
 | L6 評価(GTフリー指標: 距離別プロファイル/時間安定性) | G1 | experimental | △ evaluate_signals.py |
-| L6 評価(GT指標: 精度/PR、run間比較) | G1 | experimental | ✗ **主目的の核。GT が未生成で動かせない** |
+| L6 評価(GT指標: 精度/PR、confusion) | G1 | **works-here** | ○ 実GT(ad266d7c 人手object_ann 518箱)でL1初測定: 検出P0.58/R0.85、状態精度0.78。`eval_vs_gt.py` |
+| A→B 標準t4変換(object_ann) | G4→core | works-here | ○ `to_object_ann.py`。AWML/COCO/Deepen/CVATは既存ツール委譲。自作exporterはdeprecated |
 | L5 ros2 パリティ検証 | G6 | not-started | ✗ 隔離中。受入=launch int8 と一致 |
 | 一括実行(run_dataset.py) | G2/G5 | works-here | ○ 複数データセット・チャンネル自動発見 |
 | パス/依存の抽象化(TLR_MODEL_ROOT, requirements) | G5 | reproducible | ○ |
@@ -69,8 +71,9 @@
 
 1. **評価そのものがまだ回っていない(最大の穴)** — GT 指標が主目的の核なのに、
    GT(レビュー済みラベル)が1件も無く L6 の GT ブロックが動かせない(G1←G2, PLAN 2.5)。
-2. **人手レビューループが未実走** — 往復ツールはロスレスだが、実際にレビューして
-   `review_status` を付けた実績が無い(G2, PLAN 2.5)。これが 1 を塞いでいる。
+2. **人間が確認したGTがまだ無い** — CVAT往復とRE timeline review基盤は通ったが、
+   実際に人が `accepted/fixed/rejected` を付けたラベルはまだ無い(G2, PLAN 2.5/2.7)。
+   これが 1 を塞いでいる。
 3. **run間比較の実証がない** — fp32 vs int8、モデル間比較を GT 上で出していない(G1)。
 4. **複数データセットのスケール未実証** — 1データセットで1回動いただけ(G2/G5)。
 5. **モデルの内容同一性が未管理** — 評価結果とモデルの対応が名前依存(G5, PLAN 9)。
@@ -79,8 +82,9 @@
 
 ## 直近マイルストーン(主目的を前進させる的)
 
-- **【最優先】G2→G1 の接続**: c1af6a38 のフラグ上位フレームだけでも人手レビューし
-  (`review_priority` 順)、GT を作って L6 の GT 指標を初回算出する。これで主目的
-  「評価」が experimental→works-here に上がり、同時に「効率的な GT 生成」も実証される。
+- **【最優先】G2→G1 の接続**: c1af6a38 のフラグ上位フレームだけでも人手レビューする。
+  CVATでbbox/visibility/reject/map idを直し、RE timeline reviewでstate区間を確定し、
+  L6 の GT 指標を初回算出する。これで主目的「評価」が experimental→works-here に
+  上がり、同時に「効率的な GT 生成」も実証される。
 - **G1 run間比較**: 同じ GT 上で fp32 vs int8、tiles有無の精度差を数値化。
 - **G5**: モデル hash 検証だけ先行(評価結果の証跡として安く効く)。

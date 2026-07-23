@@ -112,6 +112,9 @@ def export_cvat(frames, out_path):
 
 
 def main():
+    import sys
+    print("DEPRECATED: export_labels.py is superseded by to_object_ann.py + t4devkit/webauto converters "
+          "(see deprecated/README.md). Running anyway.", file=sys.stderr)
     ap = argparse.ArgumentParser()
     ap.add_argument("labels_dir", help="directory of tlr_autolabel per-image JSONs")
     ap.add_argument("--format", required=True, choices=["coco", "cvat"])

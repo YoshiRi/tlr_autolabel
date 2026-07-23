@@ -1,3 +1,6 @@
+# REFERENCE ONLY (2026-07-23): Deepen conversion is delegated to external
+# t4devkit/webauto tooling from standard object_ann.json. This table is kept
+# for vocabulary alignment, not used by a maintained converter here.
 # Canonical -> deepen (Tier C) state vocabulary mapping — CONTRACT TABLE ONLY.
 # The deepen converter lives in another repo; this file is the vocabulary
 # contract it must consume so labels stay diffable with ours.
