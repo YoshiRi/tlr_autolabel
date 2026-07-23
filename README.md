@@ -2,9 +2,10 @@
 
 Tooling to **evaluate traffic-light-recognition models and efficiently produce
 the evaluation data** for it. Autolabel over camera images with the ML models
-Autoware can run, refine into review-ready GT via manual correction (CVAT), and
-evaluate. Training is out of scope; producing training-compatible exports
-(AWML / T4 / deepen) is kept only as a **compatibility** means, not a goal.
+Autoware can run, refine into review-ready GT via manual correction, and
+evaluate. Training is out of scope. Output conforms to the **standard t4dataset
+`object_ann.json`**, so downstream conversions (AWML / Deepen / CVAT / COCO) are
+delegated to existing t4devkit / webauto tooling rather than maintained here.
 
 > **Where things stand** — capabilities, goals, and maturity live in
 > [STATUS.md](STATUS.md); remaining tasks in [PLAN.md](PLAN.md). This README is
@@ -12,44 +13,64 @@ evaluate. Training is out of scope; producing training-compatible exports
 
 ## Architecture: processing layers
 
-The work is organized in layers. Lower layers never depend on higher ones;
-each layer's output contract is one of the three annotation tiers below.
+The work is organized in layers. Lower layers never depend on higher ones.
+**The solid interface is the standard t4dataset `object_ann.json` (Tier B)**:
+once labels are in that format the existing t4devkit / webauto tooling produces
+AWML info files, Deepen, CVAT, COCO etc. — we do not maintain those converters.
+Our owned surface shrinks to L1, L3, the A→B converter, and the review UI.
 
-| layer | role | input -> output | status / where |
-|-------|------|-----------------|----------------|
-| **L1 inference** | detect + classify signals on an image directory | images -> per-frame `tlr_autolabel/v1` JSON (+ optional `--viz` PNG) | `tlr_autolabel.py` (this dir) |
-| **L2 dataset export** | run L1 over a T4 dataset and convert to review/training formats | Tier A JSONs -> COCO / CVAT views | `export_labels.py` (this dir); AWML's training-input spec still to be confirmed |
-| **L3 map enrichment** | attach map context per detection: lanelet2 traffic_light way + regulatory element, via ego pose + calibration; then multi-camera / multi-head fusion into RE time series | Tier A + T4 map/annotation -> Tier B (`traffic_signal_2d/v2` sidecar) -> `traffic_signal_re/v1` | `match_traffic_lights.py`, `aggregate_regulatory_signals.py`, `render_re_timeline.py` (this repo, since 2026-07-19) |
-| **L4 annotation conversion** | convert T4 annotations to external tool formats (CVAT / deepen) and back | Tier B <-> Tier C | CVAT pair in this repo (`export_cvat_signal_task.py` / `import_cvat_signal_annotations.py`; contract `docs/cvat_interop.md`, since 2026-07-19); deepen: other repos, vocab table only |
-| **L4.5 RE timeline review** | edit signal state as intervals on physical signal groups instead of repeating CVAT attributes on every box | Tier B + `traffic_signal_re/v1` + `traffic_signal_re_review/v1` -> reviewed Tier B | `render_re_review_timeline.py` (with representative crop candidates), `make_re_review_template.py`, `apply_re_review.py`; contract `docs/re_timeline_review.md` |
-| **L5 ros2 verification** (option) | feed the same images through actual ROS 2 nodes and compare against L1 results | images -> live pipeline output | `ros2_pipeline/` (quarantined until verified; acceptance = parity with the launched Autoware pipeline, i.e. the int8 engine results) |
-| **L6 evaluation** | metrics engine over enriched labels: emits three tidy ledgers (detections / candidates / lamps) as the analysis substrate, then distance / signal_kind / facing / channel / per-lamp cuts, temporal stability, run-to-run baseline diff; GT metrics activate automatically once reviewed annotations exist (GT is always human-made — this layer never generates it) | Tier B + `traffic_signal_re/v1` (+ reviewed GT) -> `tlr_eval/v2` report + `eval_{detections,candidates,lamps}.jsonl` (schema `docs/eval_records.md`) | `evaluate_signals.py` (this repo, since 2026-07-19) |
+The prime (`'`) mark means only one thing: **whether the map / regulatory-element
+identity is carried**. The box+state+occlusion/truncation(+2D instance) core IF
+is common across A↔B; the prime adds the map-signal identity (A'/B'). The RE→lane
+relation is never persisted — it is re-derived from the lanelet2 map at eval time.
 
-Design rules that keep the layers clean:
+| layer | role | input -> output | where |
+|-------|------|-----------------|-------|
+| **L1 inference** | detect + classify signals on an image directory | images -> Tier A (`tlr_autolabel/v1` per-frame JSON) | `tlr_autolabel.py` |
+| **L2 standardize (A→B)** | convert autolabel to the **standard t4 `object_ann.json`** (the solid IF): bbox + db_tlr `category` + `occlusion`/`truncation` attributes + optional empty 2D `instance`; the optional map-signal id goes to a separate sidecar | Tier A (or A') -> Tier B (`object_ann.json` + `category`/`attribute`) [+ `traffic_light_map_association.json` for B'] | `to_object_ann.py` |
+| **L3 map enrichment (A→A')** | map association (lanelet2 way + RE) + multi-camera/head fusion; an **internal** enrichment used for review/QA, eval-time re-derivation, and to fill B' | Tier A + T4 map -> Tier A' (`traffic_signal_2d/v2` sidecar) + `traffic_signal_re/v1` | `match_traffic_lights.py`, `aggregate_regulatory_signals.py`, `render_re_timeline.py` |
+| **L4 review UI** | human correction that turns provisional A' into a confirmed Tier B: per-frame box / state / occlusion / truncation (CVAT), and RE state-intervals (timeline) | Tier A'/B -> reviewed Tier B | CVAT pair (`export_cvat_signal_task.py`/`import_cvat_signal_annotations.py`, `docs/cvat_interop.md`) + RE review (`make_re_review_template.py`, `render_re_review_timeline.py`, `apply_re_review.py`, `docs/re_timeline_review.md`) |
+| _(downstream)_ | AWML info / Deepen / CVAT / COCO **from** standard `object_ann` | Tier B -> external formats | **existing t4devkit / webauto tooling — not maintained here** |
+| **L5 ros2 verification** | score the live Autoware node against our GT (detection + classification) | node rosbag -> `tlr_autolabel/v1` -> eval | `ros2_pipeline/`, `bag_to_labels.py`, `docs/eval_design.md` |
+| **L6 evaluation** | metrics vs GT: detection P/R/IoU + classification accuracy + confusion (two-source), plus the ledger profiles; RE level via driving_log_replayer_v2 | pred + GT -> `tlr_eval*` reports | `eval_vs_gt.py`, `evaluate_signals.py` |
 
-- **L1 is inference, L2-L4.5 are pure conversion/review composition.** Anything after L1 must be
-  re-runnable without re-inference (labels are regenerated from stored JSON).
-- **L1 is model- and dataset-agnostic.** Detector variants are interchangeable
-  (`--detector`, auto-detected family); T4 linkage (`sample_data_token` etc.)
-  is an optional enrichment via `--t4-dataset`, never a dependency.
-- **L3 adds fields, it does not transform.** Regulatory-element info is
-  attached to Tier B records; Tier A files stay untouched.
-- **L4.5 edits state over time, not geometry.** CVAT owns per-frame boxes,
-  visibility, rejections, and map-id fixes; RE timeline review owns state
-  intervals and propagates them back into Tier B without changing geometry.
-- **L5 is out of the dependency graph.** Nothing in L1-L4 may import from or
-  require `ros2_pipeline/`.
-- **L6 is pure analysis.** It only reads L3 outputs (and reviewed GT when
-  present); it never writes annotations and never re-runs inference.
+Design rules:
 
-## Annotation tiers (3 specs + review companion)
+- **L1 is inference; everything after is conversion / review / analysis.** No
+  layer after L1 re-runs inference (regenerate from stored labels).
+- **L1 is model- and dataset-agnostic.** Detector variants interchangeable;
+  T4 linkage is optional via `--t4-dataset`, never required.
+- **Tier B is strictly standard.** `object_ann` carries only the standard keys;
+  the map-signal id lives in a separate optional sidecar, absent when there is
+  no map (contract: optional). The RE/lane relation is re-derived, never stored.
+- **L3 adds fields, does not transform**, and is now an internal aid (feeds B',
+  review, and eval-time map re-derivation) rather than a delivered tier.
+- **L5 is out of the dependency graph.** Nothing in L1-L4 imports `ros2_pipeline/`.
+- **L6 is pure analysis** — never writes annotations, never re-runs inference.
 
-| tier | spec | scope | consumers |
-|------|------|-------|-----------|
-| **A** | `tlr_autolabel/v1` (frozen 2026-07-18, schema below) | raw autolabel per frame; model/dataset-agnostic; full lamp detail + provenance | L2/L3, quality review |
-| **B** | `traffic_signal_2d/v2` (T4 sidecar table; v1 read-fallback: `detector_signal` -> `raw_state`) | dataset-scoped: per-signal canonical `state`, `map_traffic_light_id`, `regulatory_element_id`, review fields (`review_status`, `signal_kind`, `visibility`), provenance (`raw_state`, `detector_score`, `source_type`) — attribute contract in `docs/cvat_interop.md` | training (AWML — verify), L4, RE-level aggregation |
-| **B-review** | `traffic_signal_re_review/v1` | human decisions over physical signal groups (`member_ways`) and time intervals; applies to Tier B by propagation | L4.5, L6 GT preparation |
-| **C** | CVAT XML / deepen | external annotation tools, human correction rounds | annotators; CVAT contract `docs/cvat_interop.md`, deepen owned by converter repo |
+## Annotation tiers
+
+Core IF (common to A and B): `{sample_data_token, box, state, occlusion,
+truncation, 2D instance}`. Prime adds `{map_traffic_light_id}` (optional).
+
+| tier | spec | carries map/RE? | notes |
+|------|------|-----------------|-------|
+| **A** | `tlr_autolabel/v1` (frozen 2026-07-18) | no | raw autolabel per frame; **richest** — full per-lamp color/shape/arrow + confidence; source of truth |
+| **A'** | `traffic_signal_2d/v2` sidecar + `traffic_signal_re/v1` | yes | L3 internal enrichment: canonical `state`, `map_traffic_light_id`, review fields, RE fusion. Used for review/QA + eval-time re-derivation; **not a delivered format** |
+| **B** | standard t4 `object_ann.json` (+ `category`/`attribute`) | no | **the solid interface.** bbox + db_tlr `category` + `occlusion_state`/`truncation_state` + optional 2D `instance`. Consumed by AWML/Deepen/CVAT/COCO via existing tooling |
+| **B'** | B + `traffic_light_map_association.json` | yes | B plus the optional map-signal id (separate from the 2D instance); absent with no map. RE relation re-derived from the map, not stored |
+| **B-review** | `traffic_signal_re_review/v1` | — | human RE state-interval decisions; propagates into the reviewed annotation |
+
+> **Lossy projection is deliberate.** Tier A keeps full lamp detail; the A→B
+> `category` is the db_tlr projection (per `configs/state_vocab/db_tlr.yaml`) and
+> is always re-derivable from A. `visibility` (A') maps to `occlusion_state`;
+> `truncation_state` defaults to non-truncated until a reviewer sets it.
+
+> **Transitional (standardization in progress, 2026-07-23):** `export_awml.py`
+> and `export_labels.py` (COCO) are **superseded** by L2 (`to_object_ann.py`) +
+> external tooling and will be deprecated; the CVAT pair stays as the review UI
+> for now. `traffic_signal_2d/v2` is the L3 internal form (A'), no longer the
+> delivered "Tier B".
 
 Rules across tiers: the **canonical state vocabulary (lamp tokens
 `{color}-{shape}[-{direction}]`, sorted, comma-joined — see the state spec
@@ -613,6 +634,25 @@ Application rules:
 The normal human loop is: CVAT first for bbox/visibility/reject/map-id fixes,
 then re-run aggregation, then RE timeline review for state intervals, then
 `apply_re_review.py` to produce the reviewed Tier B sidecar consumed by L6.
+
+### Map-less T4 `object_ann.json` GT evaluation
+
+Some evaluator datasets are nuScenes/T4-derived 2D GT only: state is encoded as
+`annotation/object_ann.json` category names (`red_right`, `crosswalk_green`,
+...), with no usable lanelet2 traffic-light / regulatory-element association.
+Use the L1-vs-T4 evaluator for those datasets:
+
+```bash
+python3 eval_l1_vs_t4_gt.py \
+  --dataset-root <dataset_root> \
+  --pred-dir <dataset_root>/tlr_autolabel/<CHANNEL> \
+  --iou 0.3
+```
+
+It joins by `sample_data_token` and bbox IoU only, normalizes db_tlr category
+names to the canonical state vocabulary, and reports detection precision/recall,
+state accuracy, confusion, and per-category recall. It does not require or emit
+`map_traffic_light_id`, `regulatory_element_id`, or RE metrics.
 
 Flag vocabulary (review triage; also summarized in
 `build/tl_match/re_verification_report.json`):
