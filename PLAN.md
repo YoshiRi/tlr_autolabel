@@ -157,6 +157,11 @@ annotationの存在で自動有効化。
 - [x] object_ann変換の完全化(2026-07-23): instance(カメラ毎IoUトラッキング)+instance.json、
       mask(box矩形RLE、[W,H]自己整合・復号でbox一致確認)。標準キー厳密一致、参照整合dangling 0。
       ad266d7c: 787箱/703 instance(59が複数frame)。mask RLE variantのt4devkit一致のみ未検証(1関数で調整可)
+### 2.13 c1af6a38 のobject_ann更新(FAR含む、3D保持、2026-07-23)
+- [x] to_object_ann.py を**マージ方式**に修正: 既存の 3D テーブル(instance/attribute/category)を
+      保持して TLR 2D を追記(以前は上書きで 3D を壊す危険があった)。`--in-place`(自動バックアップ付き)追加。
+- [x] c1af6a38 in-place 更新: object_ann 空→**3323箱(FAR 530含む)**、instance 3D 284 + TLR 1256 = 1540、
+      map assoc 2854。sample_annotation(9348・3D箱)無傷・dangling参照0。backup: build/annotation_backup_20260723_163229
 ### 3. [hold] AWML 結合テスト(ユーザー指示により保留中)
 - [ ] AWML checkout 上で `create_data_t4dataset.py` を派生データセットに対して実行
 - [ ] `mask: null` / `instance_token: null` の t4dev-kit 受容確認

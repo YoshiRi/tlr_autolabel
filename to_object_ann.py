@@ -175,7 +175,10 @@ def load_records(args):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--t4-dataset", required=True)
-    ap.add_argument("--out", required=True)
+    ap.add_argument("--out", help="derived dataset dir (source symlinked, unchanged)")
+    ap.add_argument("--in-place", action="store_true",
+                    help="update --t4-dataset itself (backs up the changed tables). "
+                         "3D annotations (sample_annotation + their instances) are preserved.")
     ap.add_argument("--autolabel-dir")
     ap.add_argument("--sidecar")
     ap.add_argument("--no-masks", action="store_true",
@@ -183,44 +186,74 @@ def main():
     args = ap.parse_args()
     if bool(args.autolabel_dir) == bool(args.sidecar):
         raise SystemExit("give exactly one of --autolabel-dir / --sidecar")
+    if bool(args.out) == bool(args.in_place):
+        raise SystemExit("give exactly one of --out / --in-place")
 
     vocab = load_vocab()
     src = os.path.realpath(args.t4_dataset)
-    out = os.path.realpath(args.out)
-    if out == src:
-        raise SystemExit("--out must differ from --t4-dataset (derived view only)")
-    os.makedirs(os.path.join(out, "annotation"), exist_ok=True)
+    src_ann = os.path.join(src, "annotation")
 
+    # These tables we (re)generate. Everything else — crucially
+    # sample_annotation.json (3D boxes) and its ego_pose etc. — is untouched.
     generated = {"object_ann.json", "category.json", "attribute.json",
                  "instance.json", "traffic_light_map_association.json"}
-    for entry in os.listdir(src):
-        if entry == "annotation":
-            continue
-        dst = os.path.join(out, entry)
-        if not os.path.lexists(dst):
-            os.symlink(os.path.join(src, entry), dst)
-    for entry in os.listdir(os.path.join(src, "annotation")):
-        if entry in generated:
-            continue
-        dst = os.path.join(out, "annotation", entry)
-        if not os.path.lexists(dst):
-            os.symlink(os.path.join(src, "annotation", entry), dst)
+
+    if args.in_place:
+        out = src
+        # back up the tables we will rewrite, so 3D data is recoverable
+        import datetime
+        bdir = os.path.join(src, "build", "annotation_backup_" +
+                            datetime.datetime.now().strftime("%Y%m%d_%H%M%S"))
+        os.makedirs(bdir, exist_ok=True)
+        for f in generated:
+            p = os.path.join(src_ann, f)
+            if os.path.exists(p):
+                import shutil
+                shutil.copy2(p, os.path.join(bdir, f))
+        print(f"backed up existing tables to {bdir}")
+    else:
+        out = os.path.realpath(args.out)
+        if out == src:
+            raise SystemExit("--out must differ from --t4-dataset (or use --in-place)")
+        os.makedirs(os.path.join(out, "annotation"), exist_ok=True)
+        for entry in os.listdir(src):
+            if entry == "annotation":
+                continue
+            dst = os.path.join(out, entry)
+            if not os.path.lexists(dst):
+                os.symlink(os.path.join(src, entry), dst)
+        for entry in os.listdir(src_ann):
+            if entry in generated:
+                continue
+            dst = os.path.join(out, "annotation", entry)
+            if not os.path.lexists(dst):
+                os.symlink(os.path.join(src_ann, entry), dst)
 
     # image size + (channel, timestamp) per sample_data, for masks and tracking
     sd_wh, sd_meta = {}, {}
-    calib = {r["token"]: r for r in json.load(open(os.path.join(src, "annotation/calibrated_sensor.json")))}
-    sensor = {r["token"]: r for r in json.load(open(os.path.join(src, "annotation/sensor.json")))}
-    for sd in json.load(open(os.path.join(src, "annotation/sample_data.json"))):
+    calib = {r["token"]: r for r in json.load(open(os.path.join(src_ann, "calibrated_sensor.json")))}
+    sensor = {r["token"]: r for r in json.load(open(os.path.join(src_ann, "sensor.json")))}
+    for sd in json.load(open(os.path.join(src_ann, "sample_data.json"))):
         sd_wh[sd["token"]] = (sd.get("width"), sd.get("height"))
         ch = sensor[calib[sd["calibrated_sensor_token"]]["sensor_token"]]["channel"]
         sd_meta[sd["token"]] = (ch, sd.get("timestamp", 0))
-    scene = json.load(open(os.path.join(src, "annotation/scene.json")))
+    scene = json.load(open(os.path.join(src_ann, "scene.json")))
     scene_name = scene[0]["name"] if scene else "scene"
 
-    categories = json.load(open(os.path.join(src, "annotation", "category.json")))
+    # MERGE with existing tables so 3D annotations survive: keep source
+    # categories (car/truck/...), attributes (pseudo-label...), and 3D
+    # object instances; append our TLR 2D entries.
+    categories = json.load(open(os.path.join(src_ann, "category.json")))
     cat_token = {c["name"]: c["token"] for c in categories}
-    attr_token = {name: token_of("attribute", name) for name in ATTRIBUTES}
-    attributes = [{"token": attr_token[n], "name": n, "description": ""} for n in ATTRIBUTES]
+    src_attributes = json.load(open(os.path.join(src_ann, "attribute.json")))
+    attr_token = {a["name"]: a["token"] for a in src_attributes}
+    for name in ATTRIBUTES:
+        attr_token.setdefault(name, token_of("attribute", name))
+    attributes = src_attributes + [{"token": attr_token[n], "name": n, "description": ""}
+                                   for n in ATTRIBUTES
+                                   if n not in {a["name"] for a in src_attributes}]
+    src_instances = json.load(open(os.path.join(src_ann, "instance.json")))
+    src_object_ann = json.load(open(os.path.join(src_ann, "object_ann.json")))
 
     # gather records (with db_tlr category), assign 2D instances, then emit
     records, counts = [], {}
@@ -268,16 +301,28 @@ def main():
         inst["first_annotation_token"] = toks[0] if toks else ""
         inst["last_annotation_token"] = toks[-1] if toks else ""
 
+    # merge our TLR 2D rows with the source (3D object_ann was empty here; 3D
+    # instances must be kept). Dedup by token in case of re-runs.
+    def merge(existing, new):
+        seen = {r["token"] for r in existing}
+        return existing + [r for r in new if r["token"] not in seen]
+
+    final_object_ann = merge(src_object_ann, object_ann)
+    final_instances = merge(src_instances, instances)
+
     ann_out = os.path.join(out, "annotation")
-    json.dump(object_ann, open(os.path.join(ann_out, "object_ann.json"), "w"), indent=2)
+    json.dump(final_object_ann, open(os.path.join(ann_out, "object_ann.json"), "w"), indent=2)
     json.dump(categories, open(os.path.join(ann_out, "category.json"), "w"), indent=2)
     json.dump(attributes, open(os.path.join(ann_out, "attribute.json"), "w"), indent=2)
-    json.dump(instances, open(os.path.join(ann_out, "instance.json"), "w"), indent=2)
+    json.dump(final_instances, open(os.path.join(ann_out, "instance.json"), "w"), indent=2)
     json.dump(assoc, open(os.path.join(ann_out, "traffic_light_map_association.json"), "w"), indent=2)
 
-    print(f"instances: {len(instances)} | masks: {'off' if args.no_masks else 'box-rect RLE'}")
-    print(f"derived t4 dataset: {out}")
-    print(f"object_ann: {len(object_ann)} boxes | map associations: {len(assoc)} "
+    print(f"{'IN-PLACE update of' if args.in_place else 'derived dataset'}: {out}")
+    print(f"object_ann: {len(src_object_ann)} existing + {len(object_ann)} TLR "
+          f"= {len(final_object_ann)} | instances: {len(src_instances)} 3D + "
+          f"{len(instances)} TLR 2D = {len(final_instances)} | masks: "
+          f"{'off' if args.no_masks else 'box-rect RLE'}")
+    print(f"map associations: {len(assoc)} "
           f"({'present' if assoc else 'absent — no map/match, optional'})")
     for name, n in sorted(counts.items(), key=lambda t: -t[1]):
         print(f"  {n:5d}  {name}")
