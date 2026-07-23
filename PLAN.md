@@ -154,7 +154,9 @@ annotationの存在で自動有効化。
       29件は down系矢印(db_tlrに無く unknown化)。down_left→left/down_right→right をdb_tlrに追加 → 状態精度 0.751→0.780。
       残る誤りは①極小信号のX→unknown(green44/red20=解像度限界、系統的)②分類器の矢印左右取り違え(red→red_left 9)。
       示唆: 解像度限界はNEAR/FAR多カメラ融合の設計理由そのもの。矢印方向は分類器のモデル課題
-- [ ] instance(2D追跡)の自動付与(段階2)
+- [x] object_ann変換の完全化(2026-07-23): instance(カメラ毎IoUトラッキング)+instance.json、
+      mask(box矩形RLE、[W,H]自己整合・復号でbox一致確認)。標準キー厳密一致、参照整合dangling 0。
+      ad266d7c: 787箱/703 instance(59が複数frame)。mask RLE variantのt4devkit一致のみ未検証(1関数で調整可)
 ### 3. [hold] AWML 結合テスト(ユーザー指示により保留中)
 - [ ] AWML checkout 上で `create_data_t4dataset.py` を派生データセットに対して実行
 - [ ] `mask: null` / `instance_token: null` の t4dev-kit 受容確認

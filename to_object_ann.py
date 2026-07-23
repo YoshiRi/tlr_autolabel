@@ -8,7 +8,9 @@ consumes them -- we don't maintain those converters. B holds only:
 
   object_ann.json  bbox + category_token(db_tlr state) + attribute_tokens
                    (occlusion_state + truncation_state) + instance_token
-                   (2D bbox tracking; OPTIONAL, empty until tracked) + mask
+                   (2D bbox tracking, greedy IoU per camera) + mask
+                   (box-rectangle RLE; --no-masks for null)
+  instance.json    the tracked 2D instances (token, category, name, counts)
   category.json    source categories + the db_tlr state categories used
   attribute.json   occlusion_state.{none,partial,most} + truncation_state.{...}
 
@@ -36,9 +38,76 @@ import hashlib
 import json
 import os
 
+import numpy as np
 import yaml
 
 from state_tokens import parse_state
+
+
+def box_iou(a, b):
+    ix0, iy0 = max(a[0], b[0]), max(a[1], b[1])
+    ix1, iy1 = min(a[2], b[2]), min(a[3], b[3])
+    if ix1 <= ix0 or iy1 <= iy0:
+        return 0.0
+    inter = (ix1 - ix0) * (iy1 - iy0)
+    ua = (a[2] - a[0]) * (a[3] - a[1]) + (b[2] - b[0]) * (b[3] - b[1]) - inter
+    return inter / ua if ua > 0 else 0.0
+
+
+def box_rle(box, w, h):
+    """A rectangular RLE mask filling the bbox, in the reference t4 [W,H] size
+    convention. NOTE: our labels are detection boxes, not segmentation, so this
+    is a box-rectangle stand-in. RLE is pycocotools-encoded on the transposed
+    (W,H) array to stay self-consistent with the [W,H] size; the exact t4devkit
+    RLE variant is unverified (t4devkit unavailable) -- adjust here if needed."""
+    from pycocotools import mask as cocomask
+    x0, y0, x1, y1 = [int(round(v)) for v in box]
+    x0, y0 = max(0, x0), max(0, y0)
+    x1, y1 = min(w, x1), min(h, y1)
+    m = np.zeros((w, h), np.uint8, order="F")   # (W, H) -> pycocotools size [W,H]
+    if x1 > x0 and y1 > y0:
+        m[x0:x1, y0:y1] = 1
+    r = cocomask.encode(m)
+    return {"size": [w, h], "counts": r["counts"].decode("ascii")}
+
+
+def assign_instances(records, sd_meta):
+    """Greedy IoU tracking per camera channel across time -> instance_token per
+    record. Map-independent (a 2D annotation concept). Returns {record_idx:
+    instance_token} and the instance table."""
+    by_channel = {}
+    for i, r in enumerate(records):
+        ch, ts = sd_meta.get(r["sd"], ("", 0))
+        by_channel.setdefault(ch, []).append((ts, i))
+    inst_of = {}
+    instances = []
+    for ch, items in by_channel.items():
+        items.sort()
+        active = []  # (instance_token, last_box, first_ann_uid, category)
+        last_ts = None
+        for ts, i in items:
+            r = records[i]
+            if last_ts is not None and ts != last_ts:
+                # new frame: keep only tracks touched last frame (active reset per frame)
+                active = [a for a in active if a[4] == last_ts]
+            best, bi = 0.3, -1
+            for k, a in enumerate(active):
+                v = box_iou(r["box"], a[1])
+                if v > best:
+                    best, bi = v, k
+            if bi >= 0:
+                tok = active[bi][0]
+                active[bi] = (tok, r["box"], active[bi][2], r["cat"], ts)
+            else:
+                tok = hashlib.md5(f"inst|{ch}|{i}".encode()).hexdigest()
+                active.append((tok, r["box"], r["uid"], r["cat"], ts))
+                instances.append({"token": tok, "category_token": None,
+                                  "instance_name": None, "_cat": r["cat"],
+                                  "nbr_annotations": 0,
+                                  "first_annotation_token": "", "last_annotation_token": ""})
+            inst_of[i] = tok
+            last_ts = ts
+    return inst_of, instances
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 VOCAB_PATH = os.path.join(HERE, "configs", "state_vocab", "db_tlr.yaml")
@@ -109,6 +178,8 @@ def main():
     ap.add_argument("--out", required=True)
     ap.add_argument("--autolabel-dir")
     ap.add_argument("--sidecar")
+    ap.add_argument("--no-masks", action="store_true",
+                    help="write mask=null instead of box-rectangle RLE masks")
     args = ap.parse_args()
     if bool(args.autolabel_dir) == bool(args.sidecar):
         raise SystemExit("give exactly one of --autolabel-dir / --sidecar")
@@ -121,7 +192,7 @@ def main():
     os.makedirs(os.path.join(out, "annotation"), exist_ok=True)
 
     generated = {"object_ann.json", "category.json", "attribute.json",
-                 "traffic_light_map_association.json"}
+                 "instance.json", "traffic_light_map_association.json"}
     for entry in os.listdir(src):
         if entry == "annotation":
             continue
@@ -135,14 +206,24 @@ def main():
         if not os.path.lexists(dst):
             os.symlink(os.path.join(src, "annotation", entry), dst)
 
-    # categories: start from source, add db_tlr states as used
+    # image size + (channel, timestamp) per sample_data, for masks and tracking
+    sd_wh, sd_meta = {}, {}
+    calib = {r["token"]: r for r in json.load(open(os.path.join(src, "annotation/calibrated_sensor.json")))}
+    sensor = {r["token"]: r for r in json.load(open(os.path.join(src, "annotation/sensor.json")))}
+    for sd in json.load(open(os.path.join(src, "annotation/sample_data.json"))):
+        sd_wh[sd["token"]] = (sd.get("width"), sd.get("height"))
+        ch = sensor[calib[sd["calibrated_sensor_token"]]["sensor_token"]]["channel"]
+        sd_meta[sd["token"]] = (ch, sd.get("timestamp", 0))
+    scene = json.load(open(os.path.join(src, "annotation/scene.json")))
+    scene_name = scene[0]["name"] if scene else "scene"
+
     categories = json.load(open(os.path.join(src, "annotation", "category.json")))
     cat_token = {c["name"]: c["token"] for c in categories}
-    # attributes: standard occlusion/truncation set
     attr_token = {name: token_of("attribute", name) for name in ATTRIBUTES}
     attributes = [{"token": attr_token[n], "name": n, "description": ""} for n in ATTRIBUTES]
 
-    object_ann, assoc, counts = [], [], {}
+    # gather records (with db_tlr category), assign 2D instances, then emit
+    records, counts = [], {}
     for sd_token, box, elements, vis, map_id, uid in load_records(args):
         name = db_tlr_state(elements, vocab)
         if name not in cat_token:
@@ -150,29 +231,51 @@ def main():
             categories.append({"token": cat_token[name], "name": name,
                                "description": "db_tlr state (tlr_autolabel)",
                                "index": None, "has_orientation": False, "has_number": False})
-        occ = "occlusion_state." + OCCLUSION.get(vis or "unknown", "none")
-        attrs = [attr_token[occ], attr_token["truncation_state.non-truncated"]]
-        x0, y0, x1, y1 = box
-        oa_token = token_of("object_ann", sd_token, uid, x0, y0, x1, y1)
-        object_ann.append({
-            "token": oa_token,
-            "sample_data_token": sd_token,
-            "instance_token": None,          # 2D tracking: optional, filled later
-            "category_token": cat_token[name],
-            "attribute_tokens": attrs,
-            "bbox": [float(x0), float(y0), float(x1), float(y1)],
-            "mask": None,
-        })
-        if map_id:                            # optional map-signal identity, separate from object_ann
-            assoc.append({"object_ann_token": oa_token, "map_traffic_light_id": map_id})
+        records.append({"sd": sd_token, "box": [float(v) for v in box], "vis": vis,
+                        "map_id": map_id, "uid": uid, "cat": name})
         counts[name] = counts.get(name, 0) + 1
+
+    inst_of, instances = assign_instances(records, sd_meta)
+
+    object_ann, assoc = [], []
+    inst_anns = {}
+    for i, r in enumerate(records):
+        x0, y0, x1, y1 = r["box"]
+        oa_token = token_of("object_ann", r["sd"], r["uid"], x0, y0, x1, y1)
+        occ = "occlusion_state." + OCCLUSION.get(r["vis"] or "unknown", "none")
+        attrs = [attr_token[occ], attr_token["truncation_state.non-truncated"]]
+        w, h = sd_wh.get(r["sd"], (2880, 1860))
+        rec = {
+            "token": oa_token,
+            "sample_data_token": r["sd"],
+            "instance_token": inst_of.get(i),
+            "category_token": cat_token[r["cat"]],
+            "attribute_tokens": attrs,
+            "bbox": [x0, y0, x1, y1],
+            "mask": None if args.no_masks else box_rle(r["box"], w, h),
+        }
+        object_ann.append(rec)
+        inst_anns.setdefault(inst_of.get(i), []).append(oa_token)
+        if r["map_id"]:
+            assoc.append({"object_ann_token": oa_token, "map_traffic_light_id": r["map_id"]})
+
+    # finalize instance table (nbr/first/last + human-readable name)
+    for k, inst in enumerate(instances):
+        toks = inst_anns.get(inst["token"], [])
+        inst["category_token"] = cat_token[inst.pop("_cat")]
+        inst["instance_name"] = f"{scene_name}::{inst['token'][:8]}:{k}"
+        inst["nbr_annotations"] = len(toks)
+        inst["first_annotation_token"] = toks[0] if toks else ""
+        inst["last_annotation_token"] = toks[-1] if toks else ""
 
     ann_out = os.path.join(out, "annotation")
     json.dump(object_ann, open(os.path.join(ann_out, "object_ann.json"), "w"), indent=2)
     json.dump(categories, open(os.path.join(ann_out, "category.json"), "w"), indent=2)
     json.dump(attributes, open(os.path.join(ann_out, "attribute.json"), "w"), indent=2)
+    json.dump(instances, open(os.path.join(ann_out, "instance.json"), "w"), indent=2)
     json.dump(assoc, open(os.path.join(ann_out, "traffic_light_map_association.json"), "w"), indent=2)
 
+    print(f"instances: {len(instances)} | masks: {'off' if args.no_masks else 'box-rect RLE'}")
     print(f"derived t4 dataset: {out}")
     print(f"object_ann: {len(object_ann)} boxes | map associations: {len(assoc)} "
           f"({'present' if assoc else 'absent — no map/match, optional'})")
