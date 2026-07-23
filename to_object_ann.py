@@ -54,17 +54,25 @@ def box_iou(a, b):
     return inter / ua if ua > 0 else 0.0
 
 
+# The working t4 TLR datasets (JapanTaxi5, odaiba) store an identical EMPTY
+# placeholder mask on every 2D annotation and render the ROI from `bbox`. Real
+# per-box RLE (pycocotools) uses a variant t4devkit's mask decoder chokes on, so
+# the annotation fails to load and nothing is displayed. Match the placeholder.
+PLACEHOLDER_MASK_2880x1860 = "UFhfUzU='"
+
+
+def placeholder_mask(w, h):
+    return {"size": [w, h], "counts": PLACEHOLDER_MASK_2880x1860}
+
+
 def box_rle(box, w, h):
-    """A rectangular RLE mask filling the bbox, in the reference t4 [W,H] size
-    convention. NOTE: our labels are detection boxes, not segmentation, so this
-    is a box-rectangle stand-in. RLE is pycocotools-encoded on the transposed
-    (W,H) array to stay self-consistent with the [W,H] size; the exact t4devkit
-    RLE variant is unverified (t4devkit unavailable) -- adjust here if needed."""
+    """Real box-rectangle RLE (pycocotools, [W,H] self-consistent). Opt-in via
+    --real-masks; NOT what t4devkit renders, kept for tools that want a mask."""
     from pycocotools import mask as cocomask
     x0, y0, x1, y1 = [int(round(v)) for v in box]
     x0, y0 = max(0, x0), max(0, y0)
     x1, y1 = min(w, x1), min(h, y1)
-    m = np.zeros((w, h), np.uint8, order="F")   # (W, H) -> pycocotools size [W,H]
+    m = np.zeros((w, h), np.uint8, order="F")
     if x1 > x0 and y1 > y0:
         m[x0:x1, y0:y1] = 1
     r = cocomask.encode(m)
@@ -114,9 +122,12 @@ VOCAB_PATH = os.path.join(HERE, "configs", "state_vocab", "db_tlr.yaml")
 
 # our visibility -> standard occlusion_state (truncation not tracked in autolabel;
 # defaults to non-truncated, a reviewer sets it). Absent visibility -> none.
+# Attribute names must match the working t4 TLR datasets EXACTLY (t4devkit maps
+# them by name): occlusion_state is lowercase, Truncation_State is capitalized.
 OCCLUSION = {"full": "none", "partial": "partial", "occluded": "most", "unknown": "none"}
+TRUNCATION_DEFAULT = "Truncation_State.non-truncated"
 ATTRIBUTES = ["occlusion_state.none", "occlusion_state.partial", "occlusion_state.most",
-              "truncation_state.non-truncated", "truncation_state.truncated"]
+              "Truncation_State.non-truncated", "Truncation_State.truncated"]
 
 
 def load_vocab():
@@ -181,8 +192,9 @@ def main():
                          "3D annotations (sample_annotation + their instances) are preserved.")
     ap.add_argument("--autolabel-dir")
     ap.add_argument("--sidecar")
-    ap.add_argument("--no-masks", action="store_true",
-                    help="write mask=null instead of box-rectangle RLE masks")
+    ap.add_argument("--real-masks", action="store_true",
+                    help="write real box-rectangle RLE masks (pycocotools) instead of the "
+                         "empty placeholder t4devkit expects; use only for tools that decode masks")
     args = ap.parse_args()
     if bool(args.autolabel_dir) == bool(args.sidecar):
         raise SystemExit("give exactly one of --autolabel-dir / --sidecar")
@@ -276,7 +288,7 @@ def main():
         x0, y0, x1, y1 = r["box"]
         oa_token = token_of("object_ann", r["sd"], r["uid"], x0, y0, x1, y1)
         occ = "occlusion_state." + OCCLUSION.get(r["vis"] or "unknown", "none")
-        attrs = [attr_token[occ], attr_token["truncation_state.non-truncated"]]
+        attrs = [attr_token[occ], attr_token[TRUNCATION_DEFAULT]]
         w, h = sd_wh.get(r["sd"], (2880, 1860))
         rec = {
             "token": oa_token,
@@ -285,7 +297,7 @@ def main():
             "category_token": cat_token[r["cat"]],
             "attribute_tokens": attrs,
             "bbox": [x0, y0, x1, y1],
-            "mask": None if args.no_masks else box_rle(r["box"], w, h),
+            "mask": box_rle(r["box"], w, h) if args.real_masks else placeholder_mask(w, h),
         }
         object_ann.append(rec)
         inst_anns.setdefault(inst_of.get(i), []).append(oa_token)
@@ -301,14 +313,16 @@ def main():
         inst["first_annotation_token"] = toks[0] if toks else ""
         inst["last_annotation_token"] = toks[-1] if toks else ""
 
-    # merge our TLR 2D rows with the source (3D object_ann was empty here; 3D
-    # instances must be kept). Dedup by token in case of re-runs.
-    def merge(existing, new):
-        seen = {r["token"] for r in existing}
-        return existing + [r for r in new if r["token"] not in seen]
-
-    final_object_ann = merge(src_object_ann, object_ann)
-    final_instances = merge(src_instances, instances)
+    # Preserve only the 3D side (instances referenced by sample_annotation, and
+    # any object_ann tied to them); regenerate the 2D TLR side every run. This
+    # keeps 3D intact AND lets re-runs cleanly replace our own TLR rows instead
+    # of accumulating stale ones.
+    sample_ann = json.load(open(os.path.join(src_ann, "sample_annotation.json")))
+    inst_3d = {s["instance_token"] for s in sample_ann}
+    kept_instances = [i for i in src_instances if i["token"] in inst_3d]
+    kept_object_ann = [o for o in src_object_ann if o.get("instance_token") in inst_3d]
+    final_object_ann = kept_object_ann + object_ann
+    final_instances = kept_instances + instances
 
     ann_out = os.path.join(out, "annotation")
     json.dump(final_object_ann, open(os.path.join(ann_out, "object_ann.json"), "w"), indent=2)

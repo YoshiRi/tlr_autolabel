@@ -162,6 +162,10 @@ annotationの存在で自動有効化。
       保持して TLR 2D を追記(以前は上書きで 3D を壊す危険があった)。`--in-place`(自動バックアップ付き)追加。
 - [x] c1af6a38 in-place 更新: object_ann 空→**3323箱(FAR 530含む)**、instance 3D 284 + TLR 1256 = 1540、
       map assoc 2854。sample_annotation(9348・3D箱)無傷・dangling参照0。backup: build/annotation_backup_20260723_163229
+- [x] t4devkit表示バグ修正(2026-07-23、実データで表示確認): 動作参照(JapanTaxi5 odaiba)と比較し2点差分特定 —
+      ①mask: 参照は全レコード同一の空placeholder`UFhfUzU='`でt4devkitはbbox描画、我々の実RLEはデコード不能で非表示
+      →placeholder mask既定化(`--real-masks`で実マスク選択可)。②属性名`truncation_state`→`Truncation_State`(参照に厳密一致)。
+      再実行semantics修正: object_annは2D TLRとして毎回置換、instanceはsample_annotation参照の3Dのみ保持(dedup罠回避)
 ### 3. [hold] AWML 結合テスト(ユーザー指示により保留中)
 - [ ] AWML checkout 上で `create_data_t4dataset.py` を派生データセットに対して実行
 - [ ] `mask: null` / `instance_token: null` の t4dev-kit 受容確認
