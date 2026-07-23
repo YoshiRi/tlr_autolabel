@@ -22,7 +22,12 @@ arrow_names:            # canonical 8-way direction -> db_tlr arrow word
   right: right
   up_left: leftdiagonal
   up_right: rightdiagonal
-  # down / down_left / down_right: no db_tlr equivalent -> fallback unknown
+  # down-diagonal arrows map to the horizontal turn, matching how humans label
+  # them (verified on ad266d7c: GT labels the classifier's down_left as `left`).
+  # This also stops hiding real classifier left/right misreads as `unknown`.
+  down_left: left
+  down_right: right
+  # pure `down` (rare/ambiguous) stays unmapped -> unknown
 arrow_order: [straight, left, right, leftdiagonal, rightdiagonal]
 allowed:                # the exact db_tlr category vocabulary (32 entries)
   - green

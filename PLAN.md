@@ -149,7 +149,11 @@ annotationの存在で自動有効化。
       ad266d7c(地図なし): 787箱/map assoc 0(Optional欠落)。c1af6a38(地図あり): 3323箱/2854 assoc。キーは標準7個に厳密一致。
 - [x] 実GT初測定(ad266d7c 人手object_ann 518箱 vs L1): 検出 P=0.58 R=0.85、状態精度0.75、最大誤り=分類器のX→unknown
 - [ ] export_awml/export_labels のdeprecated化、README/STATUSのレイヤ改訂
-- [ ] instance(2D追跡)の自動付与(段階2)、unknown誤りの深掘り
+- [x] unknown誤りの深掘り(実GT ad266d7c): 105件を分解 = 75件は極小信号(中央値10px、分類器が灯火を読めず=解像度限界)、
+      29件は down系矢印(db_tlrに無く unknown化)。down_left→left/down_right→right をdb_tlrに追加 → 状態精度 0.751→0.780。
+      残る誤りは①極小信号のX→unknown(green44/red20=解像度限界、系統的)②分類器の矢印左右取り違え(red→red_left 9)。
+      示唆: 解像度限界はNEAR/FAR多カメラ融合の設計理由そのもの。矢印方向は分類器のモデル課題
+- [ ] instance(2D追跡)の自動付与(段階2)
 ### 3. [hold] AWML 結合テスト(ユーザー指示により保留中)
 - [ ] AWML checkout 上で `create_data_t4dataset.py` を派生データセットに対して実行
 - [ ] `mask: null` / `instance_token: null` の t4dev-kit 受容確認
