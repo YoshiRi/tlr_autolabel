@@ -226,7 +226,12 @@ def center(box):
     return np.array([(box[0] + box[2]) * 0.5, (box[1] + box[3]) * 0.5])
 
 
-def match_boxes(detections, candidates, gate_factor=1.5, min_iou=0.05, unmatch_cost=1.5):
+def _solve_assignment(cost, n_cand, unmatch_cost):
+    rows, cols = linear_sum_assignment(cost)
+    return {int(i): int(j) for i, j in zip(rows, cols) if j < n_cand and cost[i, j] < unmatch_cost}
+
+
+def match_boxes_legacy(detections, candidates, gate_factor=1.5, min_iou=0.05, unmatch_cost=1.5):
     """One-to-one Hungarian matching. Returns {det_index: cand_index}.
 
     Costs: overlapping pairs cost 1 - IoU (0..1); non-overlapping pairs within
@@ -236,7 +241,7 @@ def match_boxes(detections, candidates, gate_factor=1.5, min_iou=0.05, unmatch_c
     match count at the expense of quality.
     """
     if not detections or not candidates:
-        return {}
+        return {}, {}
     big = 1e6
     n_det, n_cand = len(detections), len(candidates)
     cost = np.full((n_det, n_cand + n_det), big)
@@ -257,8 +262,118 @@ def match_boxes(detections, candidates, gate_factor=1.5, min_iou=0.05, unmatch_c
                 # offset fallback: sizes must agree, since projection error
                 # shifts boxes but barely changes their scale
                 cost[i, j] = 1.0 + dist / max(gate, 1e-6)
-    rows, cols = linear_sum_assignment(cost)
-    return {int(i): int(j) for i, j in zip(rows, cols) if j < n_cand and cost[i, j] < unmatch_cost}
+    matches = _solve_assignment(cost, n_cand, unmatch_cost)
+    return matches, {i: "legacy" for i in matches}
+
+
+def _build_cost(detections, candidates, det_indices, cand_indices, rules, unmatch_cost):
+    big = 1e6
+    cost = np.full((len(det_indices), len(cand_indices) + len(det_indices)), big)
+    cost[:, len(cand_indices):] = unmatch_cost
+    stages = {}
+    for ri, det_i in enumerate(det_indices):
+        dbox = detections[det_i]["box_xyxy"]
+        ddiag = np.hypot(dbox[2] - dbox[0], dbox[3] - dbox[1])
+        for cj, cand_j in enumerate(cand_indices):
+            cbox = candidates[cand_j]["bbox"]
+            cdiag = np.hypot(cbox[2] - cbox[0], cbox[3] - cbox[1])
+            overlap = iou(dbox, cbox)
+            dist = float(np.linalg.norm(center(dbox) - center(cbox)))
+            size_ratio = max(ddiag, cdiag) / max(min(ddiag, cdiag), 1e-6)
+            for rule in rules:
+                if rule["kind"] == "iou":
+                    if overlap < rule["min_iou"]:
+                        continue
+                    cost[ri, cj] = 1.0 - overlap
+                    stages[(ri, cj)] = rule["stage"]
+                    break
+                if rule["kind"] == "distance":
+                    gate = rule["gate_factor"] * max(cdiag, ddiag)
+                    if dist > gate or size_ratio > rule["max_size_ratio"]:
+                        continue
+                    cost[ri, cj] = 1.0 + dist / max(gate, 1e-6)
+                    stages[(ri, cj)] = rule["stage"]
+                    break
+    return cost, stages
+
+
+def match_boxes_staged(detections, candidates, gate_factor=1.5, strict_min_iou=0.05,
+                       relaxed_min_iou=0.01, relaxed_size_ratio=8.0,
+                       relaxed_unmatch_cost=2.25):
+    """Two-pass one-to-one matching.
+
+    Pass 1 uses only IoU, so high-quality overlaps are claimed first. Pass 2
+    runs on the remaining detections/candidates and allows either a weaker IoU
+    or a center-distance gate with a looser size-ratio bound. This is intended
+    for map QA / low-quality map geometry cases where projection boxes are
+    visibly near the detection but too small or offset for the legacy cost.
+    """
+    if not detections or not candidates:
+        return {}, {}
+
+    det_indices = list(range(len(detections)))
+    cand_indices = list(range(len(candidates)))
+    strict_cost, strict_stages = _build_cost(
+        detections,
+        candidates,
+        det_indices,
+        cand_indices,
+        [{"kind": "iou", "min_iou": strict_min_iou, "stage": "strict_iou"}],
+        unmatch_cost=1.5,
+    )
+    strict_local = _solve_assignment(strict_cost, len(cand_indices), 1.5)
+    matches = {det_indices[i]: cand_indices[j] for i, j in strict_local.items()}
+    stages = {
+        det_indices[i]: strict_stages.get((i, j), "strict_iou")
+        for i, j in strict_local.items()
+    }
+
+    rem_det = [i for i in det_indices if i not in matches]
+    used_cands = set(matches.values())
+    rem_cand = [j for j in cand_indices if j not in used_cands]
+    if not rem_det or not rem_cand:
+        return matches, stages
+
+    relaxed_cost, relaxed_stages = _build_cost(
+        detections,
+        candidates,
+        rem_det,
+        rem_cand,
+        [
+            {"kind": "iou", "min_iou": relaxed_min_iou, "stage": "relaxed_iou"},
+            {
+                "kind": "distance",
+                "gate_factor": gate_factor,
+                "max_size_ratio": relaxed_size_ratio,
+                "stage": "relaxed_distance",
+            },
+        ],
+        unmatch_cost=relaxed_unmatch_cost,
+    )
+    relaxed_local = _solve_assignment(relaxed_cost, len(rem_cand), relaxed_unmatch_cost)
+    for i, j in relaxed_local.items():
+        det_i = rem_det[i]
+        cand_j = rem_cand[j]
+        matches[det_i] = cand_j
+        stages[det_i] = relaxed_stages.get((i, j), "relaxed")
+    return matches, stages
+
+
+def match_boxes(detections, candidates, mode="legacy", gate_factor=1.5,
+                strict_min_iou=0.05, relaxed_min_iou=0.01,
+                relaxed_size_ratio=8.0, relaxed_unmatch_cost=2.25):
+    if mode == "legacy":
+        return match_boxes_legacy(detections, candidates, gate_factor=gate_factor,
+                                  min_iou=strict_min_iou)
+    return match_boxes_staged(
+        detections,
+        candidates,
+        gate_factor=gate_factor,
+        strict_min_iou=strict_min_iou,
+        relaxed_min_iou=relaxed_min_iou,
+        relaxed_size_ratio=relaxed_size_ratio,
+        relaxed_unmatch_cost=relaxed_unmatch_cost,
+    )
 
 
 def unmatched_reason(det, det_state, candidates, matches, gate_factor=1.5):
@@ -386,6 +501,18 @@ def parse_args():
                              "truly seen edge-on) is dropped. The eval layer can filter "
                              "high-incidence candidates separately via facing_deg.")
     parser.add_argument("--gate-factor", default=1.5, type=float)
+    parser.add_argument("--match-mode", choices=["legacy", "staged"], default="legacy",
+                        help="legacy: original single Hungarian cost; staged: strict IoU pass "
+                             "then relaxed IoU/distance pass on leftovers.")
+    parser.add_argument("--strict-min-iou", default=0.05, type=float,
+                        help="Minimum IoU for legacy matching and staged strict pass.")
+    parser.add_argument("--relaxed-min-iou", default=0.01, type=float,
+                        help="Minimum IoU for staged relaxed pass.")
+    parser.add_argument("--relaxed-size-ratio", default=8.0, type=float,
+                        help="Maximum bbox diagonal ratio for staged distance fallback.")
+    parser.add_argument("--relaxed-unmatch-cost", default=2.25, type=float,
+                        help="Dummy assignment cost in staged relaxed pass; >2 allows "
+                             "any in-gate distance match.")
     parser.add_argument("--min-score", default=0.5, type=float,
                         help="Ignore detections below this detector_score.")
     parser.add_argument("--vis", default=0, type=int,
@@ -533,7 +660,16 @@ def main():
 
         candidates = project_traffic_lights(frame, traffic_lights, args.max_distance, image_wh,
                                             max_incidence_deg=args.max_incidence_deg)
-        matches = match_boxes(detections, candidates, gate_factor=args.gate_factor)
+        matches, match_stages = match_boxes(
+            detections,
+            candidates,
+            mode=args.match_mode,
+            gate_factor=args.gate_factor,
+            strict_min_iou=args.strict_min_iou,
+            relaxed_min_iou=args.relaxed_min_iou,
+            relaxed_size_ratio=args.relaxed_size_ratio,
+            relaxed_unmatch_cost=args.relaxed_unmatch_cost,
+        )
 
         stats["frames"] += 1
         stats["detections"] += len(detections)
@@ -543,6 +679,8 @@ def main():
                     det, canonical_state(det), candidates, matches, args.gate_factor)] += 1
         stats["map_candidates"] += len(candidates)
         stats["matched"] += len(matches)
+        for stage in match_stages.values():
+            stats["matched:" + stage] += 1
 
         sd = frame["sample_data"]
         matched_cand_idx = set(matches.values())
@@ -630,6 +768,7 @@ def main():
                     "projected_box": cand["bbox"] if cand else None,
                     "distance_m": cand["distance_m"] if cand else None,
                     "iou": round(pair_iou, 3),
+                    "match_stage": match_stages.get(i),
                     "unmatched_reason": (None if cand else unmatched_reason(
                         det, canonical_state(det), candidates, matches, args.gate_factor)),
                 }
@@ -757,6 +896,11 @@ def main():
         report_path.parent.mkdir(parents=True, exist_ok=True)
         report_path.write_text(json.dumps(
             {"params": {"max_distance": args.max_distance, "gate_factor": args.gate_factor,
+                        "match_mode": args.match_mode,
+                        "strict_min_iou": args.strict_min_iou,
+                        "relaxed_min_iou": args.relaxed_min_iou,
+                        "relaxed_size_ratio": args.relaxed_size_ratio,
+                        "relaxed_unmatch_cost": args.relaxed_unmatch_cost,
                         "min_score": args.min_score},
              "stats": dict(stats), "frames": report_frames}, indent=2))
         print(f"wrote {report_path}")

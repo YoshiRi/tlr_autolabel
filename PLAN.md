@@ -139,6 +139,17 @@ annotationの存在で自動有効化。
 - [x] `bag_to_labels.py`(rosbag→tlr_autolabel/v1、roi+分類をtl_idでjoin、要素enum→正準トークン検証済み、
       ±75msでGTキーframe整合)。要 source ROS2 humble
 - [ ] ユーザーからbag受領後: bag_to_labels → match → eval_vs_gt をend-to-end実行
+### 2.12 標準t4形式への集約(A→B コア変換、2026-07-23 ユーザー方針)
+- 合意: 標準 `object_ann.json` を固いIF(Tier B)とし、AWML/Deepen/CVAT/COCO変換は既存t4devkit/webautoに委譲。
+  自作 export_awml/export_labels(COCO)/deepen表 は廃止方向。
+- B契約: bbox + category(db_tlr state) + attribute(occlusion_state+truncation_state) + instance(2D追跡,当面空,Optional)。
+  地図信号identity(map_traffic_light_id)は**2D instanceと別のOptional識別子**として sidecar
+  `traffic_light_map_association.json` に保持(地図/マッチ不明なら欠落)。RE関係(レーン接続)は永続せず評価時に地図から再導出。
+- [x] `to_object_ann.py` 実装・検証: Tier A(autolabel-dir)/Tier A'(sidecar)両対応 → 標準object_ann+category+attribute+map assoc。
+      ad266d7c(地図なし): 787箱/map assoc 0(Optional欠落)。c1af6a38(地図あり): 3323箱/2854 assoc。キーは標準7個に厳密一致。
+- [x] 実GT初測定(ad266d7c 人手object_ann 518箱 vs L1): 検出 P=0.58 R=0.85、状態精度0.75、最大誤り=分類器のX→unknown
+- [ ] export_awml/export_labels のdeprecated化、README/STATUSのレイヤ改訂
+- [ ] instance(2D追跡)の自動付与(段階2)、unknown誤りの深掘り
 ### 3. [hold] AWML 結合テスト(ユーザー指示により保留中)
 - [ ] AWML checkout 上で `create_data_t4dataset.py` を派生データセットに対して実行
 - [ ] `mask: null` / `instance_token: null` の t4dev-kit 受容確認
