@@ -11,17 +11,22 @@ consumes them -- we don't maintain those converters. B holds only:
                    (2D bbox tracking, greedy IoU per camera) + mask
                    (box-rectangle RLE; --no-masks for null)
   instance.json    the tracked 2D instances (token, category, name, counts)
+  traffic_light.json  2D instance -> lanelet2 traffic-light linestring relation
   category.json    source categories + the db_tlr state categories used
   attribute.json   occlusion_state.{none,partial,most} + truncation_state.{...}
 
-Map linkage is a SEPARATE optional identity ("which map signal"), distinct from
-the 2D instance, written to a sidecar (not into object_ann) so B stays strictly
-standard and the field is simply absent when there is no map / no match:
+Map linkage is a SEPARATE relation, distinct from the 2D instance name. The B'
+target is t4devkit-defined `traffic_light.json`:
 
-  traffic_light_map_association.json  [{object_ann_token, map_traffic_light_id}]
+  {"token": ..., "instance_token": ..., "traffic_light_linestring_id": ...}
 
-The regulatory-element relation (which lanes) is NOT persisted: re-derive it
-from the lanelet2 map at evaluation time given map_traffic_light_id.
+Regulatory-element and group relationships are resolved from the map through
+traffic_light_linestring_id. Do not encode map IDs in object_ann,
+instance_token, or instance_name.
+
+During migration this converter also writes deprecated legacy
+`traffic_light_map_association.json` with matched object_ann -> map way id.
+Do not add new consumers for that file.
 
 Input is either a Tier A autolabel dir (--autolabel-dir, lamps) or a Tier B/v2
 sidecar (--sidecar, canonical state + map_traffic_light_id + visibility). Output
@@ -210,7 +215,8 @@ def main():
     # These tables we (re)generate. Everything else — crucially
     # sample_annotation.json (3D boxes) and its ego_pose etc. — is untouched.
     generated = {"object_ann.json", "category.json", "attribute.json",
-                 "instance.json", "traffic_light_map_association.json"}
+                 "instance.json", "traffic_light.json",
+                 "traffic_light_map_association.json"}
 
     if args.in_place:
         out = src
@@ -284,7 +290,7 @@ def main():
 
     inst_of, instances = assign_instances(records, sd_meta)
 
-    object_ann, assoc = [], []
+    object_ann, traffic_light, traffic_light_pairs, assoc = [], [], set(), []
     inst_anns = {}
     for i, r in enumerate(records):
         x0, y0, x1, y1 = r["box"]
@@ -292,10 +298,11 @@ def main():
         occ = "occlusion_state." + OCCLUSION.get(r["vis"] or "unknown", "none")
         attrs = [attr_token[occ], attr_token[TRUNCATION_DEFAULT]]
         w, h = sd_wh.get(r["sd"], (2880, 1860))
+        instance_token = inst_of.get(i)
         rec = {
             "token": oa_token,
             "sample_data_token": r["sd"],
-            "instance_token": inst_of.get(i),
+            "instance_token": instance_token,
             "category_token": cat_token[r["cat"]],
             "attribute_tokens": attrs,
             "bbox": [x0, y0, x1, y1],
@@ -304,8 +311,16 @@ def main():
                      else box_rle(r["box"], w, h)),
         }
         object_ann.append(rec)
-        inst_anns.setdefault(inst_of.get(i), []).append(oa_token)
+        inst_anns.setdefault(instance_token, []).append(oa_token)
         if r["map_id"]:
+            pair = (instance_token, str(r["map_id"]))
+            if pair not in traffic_light_pairs:
+                traffic_light_pairs.add(pair)
+                traffic_light.append({
+                    "token": token_of("traffic_light", instance_token, r["map_id"]),
+                    "instance_token": instance_token,
+                    "traffic_light_linestring_id": str(r["map_id"]),
+                })
             assoc.append({"object_ann_token": oa_token, "map_traffic_light_id": r["map_id"]})
 
     # finalize instance table (nbr/first/last + human-readable name)
@@ -333,14 +348,20 @@ def main():
     json.dump(categories, open(os.path.join(ann_out, "category.json"), "w"), indent=2)
     json.dump(attributes, open(os.path.join(ann_out, "attribute.json"), "w"), indent=2)
     json.dump(final_instances, open(os.path.join(ann_out, "instance.json"), "w"), indent=2)
+    traffic_light_path = os.path.join(ann_out, "traffic_light.json")
+    if traffic_light:
+        json.dump(traffic_light, open(traffic_light_path, "w"), indent=2)
+    elif os.path.exists(traffic_light_path):
+        os.remove(traffic_light_path)
     json.dump(assoc, open(os.path.join(ann_out, "traffic_light_map_association.json"), "w"), indent=2)
 
     print(f"{'IN-PLACE update of' if args.in_place else 'derived dataset'}: {out}")
     print(f"object_ann: {len(kept_object_ann)} kept(3D-linked) + {len(object_ann)} TLR "
           f"= {len(final_object_ann)} | instances: {len(kept_instances)} 3D + "
           f"{len(instances)} TLR 2D = {len(final_instances)} | masks: {args.mask}")
-    print(f"map associations: {len(assoc)} "
-          f"({'present' if assoc else 'absent — no map/match, optional'})")
+    print(f"traffic_light relations: {len(traffic_light)} "
+          f"({'wrote traffic_light.json' if traffic_light else 'traffic_light.json absent -> Tier B'})")
+    print(f"deprecated legacy map associations: {len(assoc)}")
     for name, n in sorted(counts.items(), key=lambda t: -t[1]):
         print(f"  {n:5d}  {name}")
 

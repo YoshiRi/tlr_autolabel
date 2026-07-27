@@ -1,7 +1,7 @@
 # Existing Annotation IF Notes
 
 Recorded: 2026-07-21
-Updated: 2026-07-24
+Updated: 2026-07-27
 
 対象:
 
@@ -25,7 +25,7 @@ Updated: 2026-07-24
 既存 annotation は少なくとも 2 系統に分けて扱う。
 
 - **Evaluator Annotation**: 評価用 GT / レビュー結果として使う annotation。このメモの対象。
-- **Training Annotation**: 学習用 annotation。standard T4 `object_ann.json` を本体とし、必要なら map id を別 sidecar で持つ。Observed training dataset notes are below.
+- **Training Annotation**: 学習用 annotation。standard T4 `object_ann.json` を本体とし、必要なら map identity を t4devkit 定義の `traffic_light.json` で持つ(RE / group relation は map から解く)。Observed training dataset notes are below.
 
 Evaluator Annotation の目標 IF は、評価モードに応じて以下のどちらか:
 
@@ -35,21 +35,24 @@ Evaluator Annotation の目標 IF は、評価モードに応じて以下のど�
 Training Annotation の目標 IF は:
 
 - **B**: `annotation/object_ann.json` + `annotation/category.json` + `annotation/attribute.json` + optional `annotation/instance.json`
-- **B'**: B + `annotation/traffic_light_map_association.json`
+- **B'**: B + `annotation/traffic_light.json`
 
-`traffic_light_map_association.json` is intentionally outside `object_ann.json`:
+`traffic_light.json` is intentionally outside `object_ann.json` / `instance.json`
+and is a t4dataset annotation type defined in t4devkit:
 
-```text
-[
-  {
-    "object_ann_token": "<annotation/object_ann.json token>",
-    "map_traffic_light_id": "<lanelet2 traffic_light way id>"
-  }
-]
+```json
+{
+  "token": "relation-001",
+  "instance_token": "instance-head-001",
+  "traffic_light_linestring_id": "501"
+}
 ```
 
-The RE / lane relation is not persisted in B'. It is re-derived from
-`map/lanelet2_map.osm` when evaluation needs `regulatory_element_id`.
+`instance_token` points to the 2D `instance.json` row. The
+`traffic_light_linestring_id` points to the lanelet2 traffic-light linestring.
+Regulatory-element and group relationships are already in the map and are
+resolved from that linestring. This repository must not encode those map
+identifiers in `object_ann`, `instance_token`, or `instance_name`.
 
 ### B/B' Instance Identity
 
@@ -62,21 +65,32 @@ instance is assigned by per-camera bbox continuity and is map-independent.
 Map identity is carried only by B':
 
 ```text
-annotation/traffic_light_map_association.json
-object_ann_token -> map_traffic_light_id
+annotation/traffic_light.json
+instance_token -> traffic_light_linestring_id
 ```
 
 This is deliberate for now:
 
 - standard B remains a normal T4 `object_ann` dataset with no custom map field
-- B' can be absent when there is no map or no match
+- B' can be absent when there is no map; relation absence for an instance means
+  no map match
 - one 2D tracked instance is not guaranteed to be the same semantic unit as one
   lanelet2 `traffic_light` way, especially around missed frames, camera changes,
   or manual bbox edits
 
 If a downstream evaluator wants one stable physical signal identity, it should
-join through `traffic_light_map_association.json` and then re-derive RE ids from
-the map. Do not infer map id from `instance_token` or `instance_name`.
+join through `traffic_light.json`. DLR-oriented formats are derived from that
+relationship and the map into Traffic Light ID based rows. Do not infer map id
+from `instance_token` or `instance_name`.
+
+Deprecated: `annotation/traffic_light_map_association.json` was a transitional
+repo-local association table keyed by `object_ann_token`. It is superseded by
+t4devkit-defined `annotation/traffic_light.json` and should not be used by new
+tools.
+
+Tier classification rule: B' is B plus `annotation/traffic_light.json`. If that
+file is absent, the dataset is B. Temporary/deprecated JSON files do not affect
+the B/B' distinction.
 
 ## IF Relationship Summary
 
@@ -87,7 +101,7 @@ sample_data_token
 box / bbox
 traffic-light state
 occlusion / truncation when available
-optional map_traffic_light_id
+optional traffic-light map relation
 ```
 
 The difference is the semantic unit:
@@ -96,7 +110,7 @@ The difference is the semantic unit:
 |---|---|---|---|---|---|
 | A' internal sidecar | `traffic_signal_2d/v2` | one detected or reviewed signal box | `attributes.state` canonical lamp string | `attributes.map_traffic_light_id` | yes, if box is real |
 | B training | standard T4 `object_ann.json` | one 2D signal box | `category_token` -> db_tlr category name | no | yes, if box is real |
-| B' training | B + `traffic_light_map_association.json` | one 2D signal box + optional map identity | same as B | sidecar by `object_ann_token` | yes, if box is real |
+| B' training | B + `traffic_light.json` | one 2D signal box + optional map relation | same as B | `traffic_light.json` by `instance_token` | yes, if box is real |
 | Evaluator state annotation observed here | T4 `object_ann.json` | one frame/channel state label | `category_token` -> `red` / `green` | absent | no; bbox is fixed ROI placeholder |
 
 Therefore, B' is structurally compatible with A' for map identity after an
@@ -110,11 +124,15 @@ Allowed conversions:
 
 - A' -> B: convert canonical `attributes.state` to db_tlr category, copy
   `box2d` to `bbox`, map visibility to occlusion, default truncation if absent.
-- A' -> B': same as A' -> B, plus write `attributes.map_traffic_light_id` to
-  `traffic_light_map_association.json`.
-- B' -> A': join `object_ann.token` to `traffic_light_map_association.json`,
-  convert db_tlr category back to a canonical evaluator state where possible,
-  copy `bbox` to `box2d`, and re-derive `regulatory_element_id` from the map.
+- A' -> B': same as A' -> B, plus write
+  `instance_token -> attributes.map_traffic_light_id` as
+  `traffic_light.json.instance_token -> traffic_light_linestring_id` according
+  to the t4devkit schema.
+- B' -> A': join `object_ann.instance_token` to `traffic_light.json`, convert
+  db_tlr category back to a canonical evaluator state where possible, copy
+  `bbox` to `box2d`, and expose traffic-light / RE fields as A' review
+  attributes. RE fields are resolved from the map via
+  `traffic_light_linestring_id`.
 - B/B' -> detector evaluation GT: valid only when `bbox` is a real per-signal
   2D box.
 - Observed Evaluator Annotation -> RE review: valid if the frame-level state
@@ -126,9 +144,9 @@ Blocked or lossy conversions:
   training without replacing the fixed ROI with real per-signal boxes.
 - Observed Evaluator Annotation -> geometry GT: not valid for IoU / detector
   precision because `[960, 620, 1920, 1240]` is a placeholder ROI.
-- B without `traffic_light_map_association.json` -> RE evaluation: impossible
-  to make deterministic unless the map id is reconstructed by a separate L3
-  matching step.
+- B without `traffic_light.json` -> RE evaluation: impossible to make
+  deterministic unless the map id is reconstructed by a separate L3 matching
+  step.
 - B' -> exact A lamp decomposition: lossy when db_tlr category does not encode
   all original lamp details.
 
@@ -153,12 +171,12 @@ Existing annotation files:
 - `annotation/category.json`: only `red` and `green`
 - `annotation/sample_annotation.json`: empty
 - `annotation/attribute.json`: empty
-- no repo A' / RE sidecars and no B' map-association sidecar:
+- no repo A' / RE sidecars and no B' traffic-light table:
   - `annotation/traffic_signal_2d_ann.json`: absent
   - `annotation/traffic_signal_2d_ann.reviewed.json`: absent
   - `annotation/traffic_signal_re_timeseries.json`: absent
   - `annotation/traffic_signal_re_review.json`: absent
-  - `annotation/traffic_light_map_association.json`: absent
+  - `annotation/traffic_light.json`: absent
   - `build/tl_match/match_report.json`: absent
 - no L1 output:
   - `tlr_autolabel/**/*.json`: absent
@@ -294,7 +312,7 @@ It is a T4 native 2D detection dataset where traffic-light state is encoded as t
 Do not use this dataset as direct L3/L4/L6 evaluator input:
 
 - no lanelet2 map directory was found at `map/lanelet2_map.osm`
-- no B' map-association sidecar or A' / RE sidecars were found
+- no B' traffic-light table or A' / RE sidecars were found
 - no `tlr_autolabel/**/*.json` outputs were found
 
 ### Observed Training Dataset Shape
@@ -401,7 +419,7 @@ Therefore:
 ```text
 Training Annotation category vocabulary: compatible with repo db_tlr/AWML adapter vocabulary.
 Training Annotation storage shape: compatible with Tier B state-as-category training IF.
-Training Annotation becomes B' when traffic_light_map_association.json is added.
+Training Annotation becomes B' when t4devkit-defined `traffic_light.json` is added.
 Training Annotation is not equivalent to Evaluator A'/RE IF without a conversion policy.
 ```
 
@@ -416,13 +434,13 @@ annotation/category.json
 category name = traffic-light state
 bbox = 2D signal box
 attribute_tokens = truncation / light_status / occlusion metadata
-optional traffic_light_map_association.json = object_ann_token -> map_traffic_light_id
+optional traffic_light.json = instance_token -> traffic_light_linestring_id
 listdata/{train,val,test,all}.txt = split files
 ```
 
 For evaluator compatibility, do not infer RE timelines or reviewed A' from this
-dataset alone unless `traffic_light_map_association.json` is present or an L3
-matching step can reconstruct map identity. With B' present, an adapter can
-produce A' sidecars and RE timeseries by re-deriving `regulatory_element_id`
-from the lanelet2 map. Without B', only map-less detector/classification
-evaluation is well-defined.
+dataset alone unless `traffic_light.json` is present or an L3 matching step can
+reconstruct map identity. With B' present, an adapter can produce A' sidecars,
+RE timeseries, and DLR-oriented Traffic Light ID based rows from the
+relationships in `traffic_light.json`. Without B', only map-less
+detector/classification evaluation is well-defined.

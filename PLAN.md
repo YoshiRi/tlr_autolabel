@@ -3,7 +3,7 @@
 作業計画の単一管理ファイル。タスクの追加・完了・方針変更はここを更新する。
 設計の契約は README.md 冒頭(処理層 / Tier A-C + B-review)。矛盾時は README を正とする。
 
-最終更新: 2026-07-21
+最終更新: 2026-07-27
 
 ## ✅ 完了(日付順)
 
@@ -24,6 +24,7 @@
 | 07-19 | L1 の新モデル試走対応: 多クラス yolox 一般化、動的shape/未知ファミリの明示エラー、プリセット env var 展開、README に flexibility contract(tiles はオプトイン) |
 | 07-19 | **L4 CVAT往復を当リポジトリへ移植 + 契約v2**: 属性契約 `docs/cvat_interop.md`(`traffic_signal_2d/v2`: 正準state text + signal_kind/visibility/review_status + raw_state/detector_score。circle/arrow select分解は不採用=同時多方向矢印・二重管理回避)。importはfail-loud検証(stateトークン文法・way id実在・RE id再導出)。往復ロスレス(CAM_FRONT 299/299)、aggregator v2回帰OK。dataset側の旧ペア・旧specはMOVED注記済み(削除可) |
 | 07-21 | **L4.5 RE timeline review基盤**: CVATのbbox/visibility修正と分離し、信号状態を物理信号グループ(`member_ways`)×時系列区間でレビューする `traffic_signal_re_review/v1` を追加。`render_re_review_timeline.py`(静的HTML編集UI)、`make_re_review_template.py`(ひな形生成)、`apply_re_review.py`(Tier Bへ伝播) + `docs/re_timeline_review.md`。c1af6a38既存autolabelで smoke: 24 RE→8 group、62 segment、2376/2793 annotationへaccepted伝播、再aggregate成功 |
+| 07-27 | **B/B' IF再整理**: B' の差分を t4devkit 定義 `annotation/traffic_light.json` の有無に固定。schema は `{token, instance_token, traffic_light_linestring_id}`。RE/group は map から解決。`traffic_light_map_association.json` は temporary/deprecated と明記し、新規consumer禁止 |
 
 ## 📋 残タスク(実行順)
 
@@ -139,14 +140,24 @@ annotationの存在で自動有効化。
 - [x] `bag_to_labels.py`(rosbag→tlr_autolabel/v1、roi+分類をtl_idでjoin、要素enum→正準トークン検証済み、
       ±75msでGTキーframe整合)。要 source ROS2 humble
 - [ ] ユーザーからbag受領後: bag_to_labels → match → eval_vs_gt をend-to-end実行
-### 2.12 標準t4形式への集約(A→B コア変換、2026-07-23 ユーザー方針)
-- 合意: 標準 `object_ann.json` を固いIF(Tier B)とし、AWML/Deepen/CVAT/COCO変換は既存t4devkit/webautoに委譲。
+### 2.12 標準t4形式への集約(A→B/B' コア変換、2026-07-23開始 / 2026-07-27 IF更新)
+- 合意: 標準 t4dataset annotation を固いIFとし、AWML/Deepen/CVAT/COCO/DLR変換は既存t4devkit/webautoに委譲。
   自作 export_awml/export_labels(COCO)/deepen表 は廃止方向。
-- B契約: bbox + category(db_tlr state) + attribute(occlusion_state+truncation_state) + instance(2D追跡,当面空,Optional)。
-  地図信号identity(map_traffic_light_id)は**2D instanceと別のOptional識別子**として sidecar
-  `traffic_light_map_association.json` に保持(地図/マッチ不明なら欠落)。RE関係(レーン接続)は永続せず評価時に地図から再導出。
-- [x] `to_object_ann.py` 実装・検証: Tier A(autolabel-dir)/Tier A'(sidecar)両対応 → 標準object_ann+category+attribute+map assoc。
-      ad266d7c(地図なし): 787箱/map assoc 0(Optional欠落)。c1af6a38(地図あり): 3323箱/2854 assoc。キーは標準7個に厳密一致。
+- B契約: `object_ann.json` + `category.json` + `attribute.json` + `instance.json`。
+  `instance.json` は2D画像上の信号Instance識別だけを持ち、TLR ID / lanelet2 ID を入れない。
+- B'契約: B + `annotation/traffic_light.json`。BとB'の差分は**このファイルの有無だけ**で判定する。
+  schemaは t4devkit 定義:
+  `{"token": "...", "instance_token": "...", "traffic_light_linestring_id": "501"}`。
+  必要なRE/group relationは全てmapにあり、`traffic_light_linestring_id` から解決する。
+- temporary/deprecated: `traffic_light_map_association.json` は旧 `object_ann_token -> map_traffic_light_id`
+  互換ファイル。現行IFに乗らないJSONなのでB/B'判定に使わず、新規consumerを追加しない。
+- [x] `to_object_ann.py` 実装・検証: Tier A(autolabel-dir)/Tier A'(sidecar)両対応 → 標準object_ann+category+attribute+instance。
+      現行実装は map relation がある場合だけ `traffic_light.json` を出力し、無ければ未生成/削除してTier Bにする。
+      移行互換として deprecated `traffic_light_map_association.json` は一時出力。
+- [ ] t4devkit側: `traffic_light.json` table/schema/validation を定義し、B/B'判定を `traffic_light.json` 有無に統一する。
+- [ ] 変換/adapter側: DLR向け形式は `traffic_light.json` + map から TLR ID ベースへ変換する。deprecated association は読まない。
+- [ ] `to_object_ann.py` 追加検証: 1つの `instance_token` が複数 `traffic_light_linestring_id` に張られる場合を検出し、
+      2D instance分割またはfail-loudにする(現IFでは通常1 instance = 1 map linestringを期待)。
 - [x] 実GT初測定(ad266d7c 人手object_ann 518箱 vs L1): 検出 P=0.58 R=0.85、状態精度0.75、最大誤り=分類器のX→unknown
 - [x] export_awml/export_labels を `deprecated/` へ移動(実行時警告+deprecated/README、参照ゼロ確認)。
       deepen.yaml=reference-only注記、doc参照をto_object_annに修正。README/STATUSのレイヤ改訂も反映
@@ -161,7 +172,8 @@ annotationの存在で自動有効化。
 - [x] to_object_ann.py を**マージ方式**に修正: 既存の 3D テーブル(instance/attribute/category)を
       保持して TLR 2D を追記(以前は上書きで 3D を壊す危険があった)。`--in-place`(自動バックアップ付き)追加。
 - [x] c1af6a38 in-place 更新: object_ann 空→**3323箱(FAR 530含む)**、instance 3D 284 + TLR 1256 = 1540、
-      map assoc 2854。sample_annotation(9348・3D箱)無傷・dangling参照0。backup: build/annotation_backup_20260723_163229
+      legacy map assoc 2854(当時IF)。sample_annotation(9348・3D箱)無傷・dangling参照0。backup: build/annotation_backup_20260723_163229
+      現行IFで再生成する場合は `traffic_light.json` relation数を記録する。
 - [x] t4devkit表示バグ修正(2026-07-23、実データで表示確認): 動作参照(JapanTaxi5 odaiba)と比較し2点差分特定 —
       ①mask: 参照は全レコード同一の空placeholder`UFhfUzU='`でt4devkitはbbox描画、我々の実RLEはデコード不能で非表示
       →placeholder mask既定化(`--real-masks`で実マスク選択可)。②属性名`truncation_state`→`Truncation_State`(参照に厳密一致)。

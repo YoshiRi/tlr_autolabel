@@ -3,9 +3,11 @@
 Tooling to **evaluate traffic-light-recognition models and efficiently produce
 the evaluation data** for it. Autolabel over camera images with the ML models
 Autoware can run, refine into review-ready GT via manual correction, and
-evaluate. Training is out of scope. Output conforms to the **standard t4dataset
-`object_ann.json`**, so downstream conversions (AWML / Deepen / CVAT / COCO) are
-delegated to existing t4devkit / webauto tooling rather than maintained here.
+evaluate. Training is out of scope. Output conforms to **standard t4dataset
+annotation tables** (`object_ann.json` for 2D boxes and, when map identity is
+needed, `traffic_light.json` as defined by t4devkit), so downstream conversions
+(AWML / Deepen / CVAT / COCO / DLR) are delegated to t4devkit / webauto tooling
+rather than maintained here.
 
 > **Where things stand** — capabilities, goals, and maturity live in
 > [STATUS.md](STATUS.md); remaining tasks in [PLAN.md](PLAN.md). This README is
@@ -14,23 +16,27 @@ delegated to existing t4devkit / webauto tooling rather than maintained here.
 ## Architecture: processing layers
 
 The work is organized in layers. Lower layers never depend on higher ones.
-**The solid interface is the standard t4dataset `object_ann.json` (Tier B)**:
-once labels are in that format the existing t4devkit / webauto tooling produces
-AWML info files, Deepen, CVAT, COCO etc. — we do not maintain those converters.
-Our owned surface shrinks to L1, L3, the A→B converter, and the review UI.
+**The solid interface is standard t4dataset annotation**: Tier B is
+`object_ann.json` for 2D signal boxes; Tier B' adds t4devkit-defined
+`traffic_light.json` for the relation from a 2D traffic-light instance to a map
+traffic-light linestring. Once labels are in that shape, t4devkit / webauto
+tooling produces AWML info files, Deepen, CVAT, COCO, DLR etc. — we do not
+maintain those converters. Our owned surface shrinks to L1, L3, the A→B
+converter, and the review UI.
 
 The prime (`'`) mark means only one thing: **whether the map / regulatory-element
 identity is carried**. The box+state+occlusion/truncation(+2D instance) core IF
-is common across A↔B; the prime adds the map-signal identity (A'/B'). The RE→lane
-relation is never persisted — it is re-derived from the lanelet2 map at eval time.
+is common across A↔B; the prime adds traffic-light map identity in
+`traffic_light.json` (A'/B'). `instance.json` remains a 2D image-instance table
+and never stores lanelet2 traffic-light IDs.
 
 | layer | role | input -> output | where |
 |-------|------|-----------------|-------|
 | **L1 inference** | detect + classify signals on an image directory | images -> Tier A (`tlr_autolabel/v1` per-frame JSON) | `tlr_autolabel.py` |
-| **L2 standardize (A→B)** | convert autolabel to the **standard t4 `object_ann.json`** (the solid IF): bbox + db_tlr `category` + `occlusion`/`truncation` attributes + optional empty 2D `instance`; the optional map-signal id goes to a separate sidecar | Tier A (or A') -> Tier B (`object_ann.json` + `category`/`attribute`) [+ `traffic_light_map_association.json` for B'] | `to_object_ann.py` |
-| **L3 map enrichment (A→A')** | map association (lanelet2 way + RE) + multi-camera/head fusion; an **internal** enrichment used for review/QA, eval-time re-derivation, and to fill B' | Tier A + T4 map -> Tier A' (`traffic_signal_2d/v2` sidecar) + `traffic_signal_re/v1` | `match_traffic_lights.py`, `aggregate_regulatory_signals.py`, `render_re_timeline.py` |
+| **L2 standardize (A→B)** | convert autolabel to standard t4dataset annotation: bbox + db_tlr `category` + `occlusion`/`truncation` attributes + 2D `instance`; map-signal identity belongs to t4devkit-defined `traffic_light.json` for B' | Tier A (or A') -> Tier B (`object_ann.json` + `category`/`attribute`/`instance`) [+ `traffic_light.json` for B'] | `to_object_ann.py` |
+| **L3 map enrichment (A→A')** | map association (lanelet2 way + RE group) + multi-camera/head fusion; an **internal** enrichment used for review/QA and to fill B' | Tier A + T4 map -> Tier A' (`traffic_signal_2d/v2` sidecar) + `traffic_signal_re/v1` | `match_traffic_lights.py`, `aggregate_regulatory_signals.py`, `render_re_timeline.py` |
 | **L4 review UI** | human correction that turns provisional A' into reviewed GT: per-frame box / state / visibility / map id (CVAT), and RE state-intervals (timeline); reviewed A' can then be standardized to B/B' | Tier A' -> reviewed A' -> Tier B/B' | CVAT pair (`export_cvat_signal_task.py`/`import_cvat_signal_annotations.py`, `docs/cvat_interop.md`) + RE review (`make_re_review_template.py`, `render_re_review_timeline.py`, `apply_re_review.py`, `docs/re_timeline_review.md`) |
-| _(downstream)_ | AWML info / Deepen / CVAT / COCO **from** standard `object_ann` | Tier B -> external formats | **existing t4devkit / webauto tooling — not maintained here** |
+| _(downstream)_ | AWML info / Deepen / CVAT / COCO / DLR **from** standard t4dataset annotation | Tier B/B' -> external formats | **existing t4devkit / webauto tooling — not maintained here** |
 | **L5 ros2 verification** | score the live Autoware node against our GT (detection + classification) | node rosbag -> `tlr_autolabel/v1` -> eval | `ros2_pipeline/`, `bag_to_labels.py`, `docs/eval_design.md` |
 | **L6 evaluation** | metrics vs GT: detection P/R/IoU + classification accuracy + confusion (two-source), plus the ledger profiles; RE level via driving_log_replayer_v2 | pred + GT -> `tlr_eval*` reports | `eval_vs_gt.py`, `evaluate_signals.py` |
 
@@ -40,32 +46,45 @@ Design rules:
   layer after L1 re-runs inference (regenerate from stored labels).
 - **L1 is model- and dataset-agnostic.** Detector variants interchangeable;
   T4 linkage is optional via `--t4-dataset`, never required.
-- **Tier B is strictly standard.** `object_ann` carries only the standard keys;
-  the map-signal id lives in a separate optional sidecar, absent when there is
-  no map (contract: optional). The RE/lane relation is re-derived, never stored.
+- **Tier B is strictly standard.** `object_ann` carries only standard 2D
+  annotation keys. `traffic_light.json` is the B' relation table
+  `{token, instance_token, traffic_light_linestring_id}`; it is a t4dataset
+  type defined in t4devkit, not a repo-local ad hoc sidecar. Regulatory-element
+  and group relationships are resolved from the map.
 - **L3 adds fields, does not transform**, and is now an internal aid (feeds B',
-  review, and eval-time map re-derivation) rather than a delivered tier.
+  review, and `traffic_light.json` population) rather than a delivered tier.
 - **L5 is out of the dependency graph.** Nothing in L1-L4 imports `ros2_pipeline/`.
 - **L6 is pure analysis** — never writes annotations, never re-runs inference.
 
 ## Annotation tiers
 
 Core IF (common to A and B): `{sample_data_token, box, state, occlusion,
-truncation, 2D instance}`. Prime adds `{map_traffic_light_id}` (optional).
+truncation, 2D instance}`. Prime adds the 2D instance -> map traffic-light
+linestring relation in `traffic_light.json`.
 
 | tier | spec | carries map/RE? | notes |
 |------|------|-----------------|-------|
 | **A** | `tlr_autolabel/v1` (frozen 2026-07-18) | no | raw autolabel per frame; **richest** — full per-lamp color/shape/arrow + confidence; source of truth |
-| **A'** | `traffic_signal_2d/v2` sidecar + `traffic_signal_re/v1` | yes | L3 internal enrichment: canonical `state`, `map_traffic_light_id`, review fields, RE fusion. Used for review/QA + eval-time re-derivation; **not a delivered format** |
+| **A'** | `traffic_signal_2d/v2` sidecar + `traffic_signal_re/v1` | yes | L3 internal enrichment: canonical `state`, `map_traffic_light_id`, review fields, RE fusion. Used for review/QA + B' population; **not a delivered format** |
 | **B** | standard t4 `object_ann.json` (+ `category`/`attribute`) | no | **the solid interface.** bbox + db_tlr `category` + `occlusion_state`/`truncation_state` + optional 2D `instance`. Consumed by AWML/Deepen/CVAT/COCO via existing tooling |
-| **B'** | B + `traffic_light_map_association.json` | yes | B plus the optional map-signal id (separate from the 2D instance); absent with no map. RE relation re-derived from the map, not stored |
+| **B'** | B + `traffic_light.json` | yes | B plus t4devkit-defined traffic-light relation rows: `{token, instance_token, traffic_light_linestring_id}`. Relation absence means no map match. RE/group relations come from the map |
 | **B-review** | `traffic_signal_re_review/v1` | — | human RE state-interval decisions; propagates into the reviewed annotation |
 
 In B/B', `object_ann.instance_token` is a standard T4 2D annotation instance,
 not a lanelet2 map id. The current converter assigns it from per-camera bbox
-continuity. Physical signal identity lives only in B'
-`traffic_light_map_association.json` as `object_ann_token ->
-map_traffic_light_id`.
+continuity. If no 2D cross-frame object association is made, each observation
+still receives a generated 2D instance ID; do not encode Traffic Light IDs in
+`instance_token` or `instance_name`. Physical map identity lives only in
+`traffic_light.json` as `instance_token -> traffic_light_linestring_id`.
+
+Deprecated: `annotation/traffic_light_map_association.json` was a transitional
+repo-local file (`object_ann_token -> map_traffic_light_id`). New code and docs
+must use t4devkit-defined `annotation/traffic_light.json`; the old file may be
+emitted temporarily only for backward compatibility.
+
+Tier classification rule: a dataset is B' iff `annotation/traffic_light.json`
+exists. A dataset without that file is Tier B, regardless of any temporary or
+deprecated repo-local JSON files.
 
 > **Lossy projection is deliberate.** Tier A keeps full lamp detail; the A→B
 > `category` is the db_tlr projection (per `configs/state_vocab/db_tlr.yaml`) and
@@ -524,11 +543,12 @@ Fusion repair policies (decided 2026-07-19):
 
 Written by `match_traffic_lights.py` to `annotation/traffic_signal_2d_ann.json`.
 This is the internal map-enriched IF the L4 review tools consume. Delivered
-Tier B remains standard T4 `object_ann.json`; optional B' map identity is stored
-in `annotation/traffic_light_map_association.json`. The **attribute-level
-contract (types, defaults, edit rules) lives in `docs/cvat_interop.md`** — the
-summary below is for orientation. v1 read-fallback: `detector_signal` ->
-`raw_state`.
+Tier B/B' remains standard t4dataset annotation: `object_ann.json` for 2D boxes,
+and `traffic_light.json` for the 2D instance -> map linestring relation when B'
+is needed. The
+**attribute-level contract (types, defaults, edit rules) lives in
+`docs/cvat_interop.md`** — the summary below is for orientation. v1
+read-fallback: `detector_signal` -> `raw_state`.
 
 ```jsonc
 {
