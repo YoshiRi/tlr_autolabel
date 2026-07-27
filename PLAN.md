@@ -153,11 +153,16 @@ annotationの存在で自動有効化。
   互換ファイル。現行IFに乗らないJSONなのでB/B'判定に使わず、新規consumerを追加しない。
 - [x] `to_object_ann.py` 実装・検証: Tier A(autolabel-dir)/Tier A'(sidecar)両対応 → 標準object_ann+category+attribute+instance。
       現行実装は map relation がある場合だけ `traffic_light.json` を出力し、無ければ未生成/削除してTier Bにする。
-      移行互換として deprecated `traffic_light_map_association.json` は一時出力。
+      移行互換として deprecated `traffic_light_map_association.json` は `--write-deprecated-map-association` 明示時だけ一時出力。
 - [ ] t4devkit側: `traffic_light.json` table/schema/validation を定義し、B/B'判定を `traffic_light.json` 有無に統一する。
 - [ ] 変換/adapter側: DLR向け形式は `traffic_light.json` + map から TLR ID ベースへ変換する。deprecated association は読まない。
-- [ ] `to_object_ann.py` 追加検証: 1つの `instance_token` が複数 `traffic_light_linestring_id` に張られる場合を検出し、
-      2D instance分割またはfail-loudにする(現IFでは通常1 instance = 1 map linestringを期待)。
+- [x] `to_object_ann.py` 追加検証: 1つの `instance_token` が複数 `traffic_light_linestring_id` に張られないよう
+      tracking時に異なるmap idの結合を禁止し、出力前にもfail-loud検証を追加(現IFでは通常1 instance = 1 map linestringを期待)。
+- [x] L2 IF smoke(2026-07-27): `/tmp/tlr_l2_if_test.czPyGT` に cb7fd5c0 dataset の軽量コピー(annotation実体、
+      data/input_bag/mapはsymlink)を作成して `to_object_ann.py --sidecar` 実行。
+      B': 1766 object_ann / 228 instance / 110 traffic_light relation、schema key一致、instance/map参照欠落0、
+      deprecated associationはdefault非出力。B: map id除去sidecarで `traffic_light.json` 未生成。
+      同一out再利用でもB'→B再変換で stale `traffic_light.json` 削除確認。
 - [x] 実GT初測定(ad266d7c 人手object_ann 518箱 vs L1): 検出 P=0.58 R=0.85、状態精度0.75、最大誤り=分類器のX→unknown
 - [x] export_awml/export_labels を `deprecated/` へ移動(実行時警告+deprecated/README、参照ゼロ確認)。
       deepen.yaml=reference-only注記、doc参照をto_object_annに修正。README/STATUSのレイヤ改訂も反映

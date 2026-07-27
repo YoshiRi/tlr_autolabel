@@ -80,7 +80,7 @@ still receives a generated 2D instance ID; do not encode Traffic Light IDs in
 Deprecated: `annotation/traffic_light_map_association.json` was a transitional
 repo-local file (`object_ann_token -> map_traffic_light_id`). New code and docs
 must use t4devkit-defined `annotation/traffic_light.json`; the old file may be
-emitted temporarily only for backward compatibility.
+emitted temporarily only with explicit compatibility flags.
 
 Tier classification rule: a dataset is B' iff `annotation/traffic_light.json`
 exists. A dataset without that file is Tier B, regardless of any temporary or

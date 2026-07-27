@@ -24,7 +24,7 @@ Regulatory-element and group relationships are resolved from the map through
 traffic_light_linestring_id. Do not encode map IDs in object_ann,
 instance_token, or instance_name.
 
-During migration this converter also writes deprecated legacy
+During migration this converter can optionally write deprecated legacy
 `traffic_light_map_association.json` with matched object_ann -> map way id.
 Do not add new consumers for that file.
 
@@ -84,10 +84,25 @@ def box_rle(box, w, h):
     return {"size": [w, h], "counts": r["counts"].decode("ascii")}
 
 
+def instance_token_for(ch, record_index, record):
+    uid = record.get("uid") or f"record-{record_index}"
+    box = ",".join(f"{float(v):.3f}" for v in record["box"])
+    return hashlib.md5(f"instance|{ch}|{record['sd']}|{uid}|{box}".encode()).hexdigest()
+
+
+def map_ids_compatible(track_map_id, record_map_id):
+    return not track_map_id or not record_map_id or str(track_map_id) == str(record_map_id)
+
+
+def merged_map_id(track_map_id, record_map_id):
+    return str(track_map_id or record_map_id or "")
+
+
 def assign_instances(records, sd_meta):
     """Greedy IoU tracking per camera channel across time -> instance_token per
-    record. Map-independent (a 2D annotation concept). Returns {record_idx:
-    instance_token} and the instance table."""
+    record. Instance identity is a 2D annotation concept; map ids are used only
+    to avoid writing one instance -> multiple traffic-light linestring relations.
+    Returns {record_idx: instance_token} and the instance table."""
     by_channel = {}
     for i, r in enumerate(records):
         ch, ts = sd_meta.get(r["sd"], ("", 0))
@@ -96,7 +111,11 @@ def assign_instances(records, sd_meta):
     instances = []
     for ch, items in by_channel.items():
         items.sort()
-        active = []  # (instance_token, last_box, first_ann_uid, category)
+        # (instance_token, last_box, first_ann_uid, category, last_ts, map_id)
+        # The instance remains a 2D image identity, but a single instance cannot
+        # point to multiple map linestrings in traffic_light.json. Preventing
+        # incompatible map merges here keeps the relation table unambiguous.
+        active = []
         last_ts = None
         for ts, i in items:
             r = records[i]
@@ -105,15 +124,19 @@ def assign_instances(records, sd_meta):
                 active = [a for a in active if a[4] == last_ts]
             best, bi = 0.3, -1
             for k, a in enumerate(active):
+                if not map_ids_compatible(a[5], r.get("map_id")):
+                    continue
                 v = box_iou(r["box"], a[1])
                 if v > best:
                     best, bi = v, k
             if bi >= 0:
                 tok = active[bi][0]
-                active[bi] = (tok, r["box"], active[bi][2], r["cat"], ts)
+                active[bi] = (tok, r["box"], active[bi][2], r["cat"], ts,
+                              merged_map_id(active[bi][5], r.get("map_id")))
             else:
-                tok = hashlib.md5(f"inst|{ch}|{i}".encode()).hexdigest()
-                active.append((tok, r["box"], r["uid"], r["cat"], ts))
+                tok = instance_token_for(ch, i, r)
+                active.append((tok, r["box"], r["uid"], r["cat"], ts,
+                               str(r.get("map_id") or "")))
                 instances.append({"token": tok, "category_token": None,
                                   "instance_name": None, "_cat": r["cat"],
                                   "nbr_annotations": 0,
@@ -202,6 +225,10 @@ def main():
                          "placeholder: the working-dataset placeholder RLE (renders a big "
                          "fill in t4devkit). real: box-rectangle pycocotools RLE (not "
                          "decoded by t4devkit).")
+    ap.add_argument("--write-deprecated-map-association", action="store_true",
+                    help="temporary compatibility only: also write deprecated "
+                         "traffic_light_map_association.json. New consumers must use "
+                         "traffic_light.json.")
     args = ap.parse_args()
     if bool(args.autolabel_dir) == bool(args.sidecar):
         raise SystemExit("give exactly one of --autolabel-dir / --sidecar")
@@ -291,6 +318,7 @@ def main():
     inst_of, instances = assign_instances(records, sd_meta)
 
     object_ann, traffic_light, traffic_light_pairs, assoc = [], [], set(), []
+    map_ids_by_instance = {}
     inst_anns = {}
     for i, r in enumerate(records):
         x0, y0, x1, y1 = r["box"]
@@ -313,6 +341,7 @@ def main():
         object_ann.append(rec)
         inst_anns.setdefault(instance_token, []).append(oa_token)
         if r["map_id"]:
+            map_ids_by_instance.setdefault(instance_token, set()).add(str(r["map_id"]))
             pair = (instance_token, str(r["map_id"]))
             if pair not in traffic_light_pairs:
                 traffic_light_pairs.add(pair)
@@ -322,6 +351,14 @@ def main():
                     "traffic_light_linestring_id": str(r["map_id"]),
                 })
             assoc.append({"object_ann_token": oa_token, "map_traffic_light_id": r["map_id"]})
+
+    ambiguous = {k: sorted(v) for k, v in map_ids_by_instance.items() if len(v) > 1}
+    if ambiguous:
+        examples = ", ".join(f"{k}:{'/'.join(v)}" for k, v in list(ambiguous.items())[:5])
+        raise SystemExit(
+            "one instance_token maps to multiple traffic_light_linestring_id values; "
+            f"split the 2D instance before writing B' ({examples})"
+        )
 
     # finalize instance table (nbr/first/last + human-readable name)
     for k, inst in enumerate(instances):
@@ -353,7 +390,11 @@ def main():
         json.dump(traffic_light, open(traffic_light_path, "w"), indent=2)
     elif os.path.exists(traffic_light_path):
         os.remove(traffic_light_path)
-    json.dump(assoc, open(os.path.join(ann_out, "traffic_light_map_association.json"), "w"), indent=2)
+    legacy_assoc_path = os.path.join(ann_out, "traffic_light_map_association.json")
+    if args.write_deprecated_map_association:
+        json.dump(assoc, open(legacy_assoc_path, "w"), indent=2)
+    elif os.path.exists(legacy_assoc_path):
+        os.remove(legacy_assoc_path)
 
     print(f"{'IN-PLACE update of' if args.in_place else 'derived dataset'}: {out}")
     print(f"object_ann: {len(kept_object_ann)} kept(3D-linked) + {len(object_ann)} TLR "
@@ -361,7 +402,8 @@ def main():
           f"{len(instances)} TLR 2D = {len(final_instances)} | masks: {args.mask}")
     print(f"traffic_light relations: {len(traffic_light)} "
           f"({'wrote traffic_light.json' if traffic_light else 'traffic_light.json absent -> Tier B'})")
-    print(f"deprecated legacy map associations: {len(assoc)}")
+    if args.write_deprecated_map_association:
+        print(f"deprecated legacy map associations: {len(assoc)}")
     for name, n in sorted(counts.items(), key=lambda t: -t[1]):
         print(f"  {n:5d}  {name}")
 
