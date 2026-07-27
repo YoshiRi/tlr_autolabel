@@ -192,9 +192,11 @@ def main():
                          "3D annotations (sample_annotation + their instances) are preserved.")
     ap.add_argument("--autolabel-dir")
     ap.add_argument("--sidecar")
-    ap.add_argument("--real-masks", action="store_true",
-                    help="write real box-rectangle RLE masks (pycocotools) instead of the "
-                         "empty placeholder t4devkit expects; use only for tools that decode masks")
+    ap.add_argument("--mask", choices=["null", "placeholder", "real"], default="null",
+                    help="null (default): no mask, t4devkit shows the bbox ROI only. "
+                         "placeholder: the working-dataset placeholder RLE (renders a big "
+                         "fill in t4devkit). real: box-rectangle pycocotools RLE (not "
+                         "decoded by t4devkit).")
     args = ap.parse_args()
     if bool(args.autolabel_dir) == bool(args.sidecar):
         raise SystemExit("give exactly one of --autolabel-dir / --sidecar")
@@ -297,7 +299,9 @@ def main():
             "category_token": cat_token[r["cat"]],
             "attribute_tokens": attrs,
             "bbox": [x0, y0, x1, y1],
-            "mask": box_rle(r["box"], w, h) if args.real_masks else placeholder_mask(w, h),
+            "mask": (None if args.mask == "null"
+                     else placeholder_mask(w, h) if args.mask == "placeholder"
+                     else box_rle(r["box"], w, h)),
         }
         object_ann.append(rec)
         inst_anns.setdefault(inst_of.get(i), []).append(oa_token)
@@ -332,10 +336,9 @@ def main():
     json.dump(assoc, open(os.path.join(ann_out, "traffic_light_map_association.json"), "w"), indent=2)
 
     print(f"{'IN-PLACE update of' if args.in_place else 'derived dataset'}: {out}")
-    print(f"object_ann: {len(src_object_ann)} existing + {len(object_ann)} TLR "
-          f"= {len(final_object_ann)} | instances: {len(src_instances)} 3D + "
-          f"{len(instances)} TLR 2D = {len(final_instances)} | masks: "
-          f"{'off' if args.no_masks else 'box-rect RLE'}")
+    print(f"object_ann: {len(kept_object_ann)} kept(3D-linked) + {len(object_ann)} TLR "
+          f"= {len(final_object_ann)} | instances: {len(kept_instances)} 3D + "
+          f"{len(instances)} TLR 2D = {len(final_instances)} | masks: {args.mask}")
     print(f"map associations: {len(assoc)} "
           f"({'present' if assoc else 'absent — no map/match, optional'})")
     for name, n in sorted(counts.items(), key=lambda t: -t[1]):

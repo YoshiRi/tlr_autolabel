@@ -33,7 +33,7 @@ LABEL_ATTRS = [
     ("facing", "text", "", False),
     ("raw_state", "text", "", False),
     ("detector_score", "text", "", False),
-    ("source_type", "select", "manual\nprojected_map\nauto\ninterpolated", False),
+    ("source_type", "select", "manual\nprojected_map\nauto\ninterpolated\nmap_presence", False),
     ("annotation_uid", "text", "", False),
     # soft association kept for unmatched detections (info not lost)
     ("map_candidate_id", "text", "", False),

@@ -12,9 +12,9 @@ L1 inference.
 
 | layer | Owns | Does not own |
 |---|---|---|
-| CVAT / Tier B import | `box2d`, false-positive rejection, `visibility`, `map_traffic_light_id`, local bbox additions | Bulk state propagation across frames |
+| CVAT / A' import | `box2d`, false-positive rejection, `visibility`, `map_traffic_light_id`, local bbox additions | Bulk state propagation across frames |
 | RE timeline review | `state` and `review_status` over a physical signal group/time interval | Geometry, raw detector provenance, map matching |
-| L6 evaluation | Reads reviewed Tier B | Generates or edits GT |
+| L6 evaluation | Reads reviewed A' sidecar / derived GT | Generates or edits GT |
 
 ## Signal group identity
 
@@ -73,10 +73,10 @@ tokens with the same parser used by CVAT import.
 
 ## Application rules
 
-`apply_re_review.py` reads Tier B and this review sidecar, then writes a new
-Tier B sidecar. It never edits the input file in place.
+`apply_re_review.py` reads A' and this review sidecar, then writes a new
+reviewed A' sidecar. It never edits the input file in place.
 
-For a Tier B annotation, a decision matches when:
+For an A' annotation, a decision matches when:
 
 - `timestamp` is inside `[start_timestamp, end_timestamp]`, and
 - `map_traffic_light_id` is in `member_ways`, or the annotation's
@@ -101,14 +101,14 @@ Use existing autolabel/map outputs; do not rerun L1 just for review.
 
 ```bash
 # 1. Optional static editor for manual review. It also generates representative
-#    crop candidates from the Tier B sidecar.
+#    crop candidates from the A' sidecar.
 python3 render_re_review_timeline.py --dataset-root <dataset>
 
 # 2. Optional JSON template. Default status is unchecked.
 python3 make_re_review_template.py --dataset-root <dataset> \
   --output annotation/traffic_signal_re_review.template.json
 
-# 3. Apply a reviewed JSON to the current Tier B sidecar
+# 3. Apply a reviewed JSON to the current A' sidecar
 python3 apply_re_review.py --dataset-root <dataset> \
   --review annotation/traffic_signal_re_review.json \
   --output annotation/traffic_signal_2d_ann.reviewed.json

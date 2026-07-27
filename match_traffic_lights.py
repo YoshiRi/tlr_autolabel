@@ -537,9 +537,9 @@ def parse_args():
                         help="Only bridge gaps up to this many consecutive missing frames.")
     parser.add_argument("--map-fill", dest="map_fill", action="store_true", default=True,
                         help="Trust the map (default on): a near, front-facing signal the "
-                             "detector missed entirely still gets an unknown box at its "
-                             "projected map position, for review. Independent of temporal "
-                             "gap filling — catches signals never detected in a run.")
+                             "detector missed between real detections still gets an unknown "
+                             "box at its projected map position, for review. Independent of "
+                             "state gap filling.")
     parser.add_argument("--no-map-fill", dest="map_fill", action="store_false")
     parser.add_argument("--map-fill-max-distance", default=130.0, type=float,
                         help="Only map-fill signals within this distance. Corroboration "
@@ -550,9 +550,9 @@ def parse_args():
                              "precise with distance; the eval layer bins by distance.")
     parser.add_argument("--map-fill-window", default=30, type=int,
                         help="Map-fill a near/front frame only if the SAME signal was "
-                             "actually detected within this many frames — the projection "
-                             "is trusted only where a real detection corroborates it, so we "
-                             "don't invent boxes on occluded/mis-projected empty regions.")
+                             "actually detected before and after within this many frames — "
+                             "the projection is trusted only for bracketed misses, so it "
+                             "does not extrapolate after a signal leaves the image.")
     return parser.parse_args()
 
 
@@ -610,6 +610,18 @@ def plan_gap_fills(track, max_gap, mode):
             yield e, "unknown"
         for e in track[matched[-1] + 1:matched[-1] + 1 + max_gap]:
             yield e, "unknown"
+
+
+def bracketed_by_matches(index: int, matched_indices: list[int], window: int) -> bool:
+    """True when an unmatched projected frame is bounded by real detections.
+
+    Map-presence fill is intentionally not one-sided extrapolation: once a
+    signal leaves the frame (commonly through the top edge), the last detection
+    must not keep authorizing projected boxes for the next `window` frames.
+    """
+    has_prev = any(0 < index - m <= window for m in matched_indices)
+    has_next = any(0 < m - index <= window for m in matched_indices)
+    return has_prev and has_next
 
 
 def main():
@@ -826,15 +838,14 @@ def main():
                           2 if state != "unknown" else 1, "interpolated", state, g)
             if args.map_fill:
                 # Near, front-facing frames the detector missed get an unknown box
-                # at the projected position -- but ONLY where a real detection of
-                # the same signal within map_fill_window corroborates the
-                # projection (otherwise the map alone drops boxes on occluded /
-                # mis-projected empty sky). track is time-sorted.
+                # at the projected position -- but ONLY for misses bracketed by
+                # real detections of the same signal. One-sided extrapolation
+                # leaves stale boxes after a signal exits through the image top.
                 matched_idx = [i for i, e in enumerate(track) if e["state"] is not None]
                 for i, e in enumerate(track):
                     if (e["state"] is None and e["facing"] == "front"
                             and e["distance"] <= args.map_fill_max_distance
-                            and any(abs(i - m) <= args.map_fill_window for m in matched_idx)):
+                            and bracketed_by_matches(i, matched_idx, args.map_fill_window)):
                         offer((e["sample_data_token"], way_id), 1,
                               "map_presence", "unknown", e)
 
@@ -879,7 +890,8 @@ def main():
         stats["backfilled_map_presence"] = n_mappres
         print(f"backfill: {len(fills)} boxes "
               f"({n_state} gap-filled with state, {n_unknown} unknown; "
-              f"of which {n_mappres} map-presence @<= {args.map_fill_max_distance:g}m front; "
+              f"of which {n_mappres} bracketed map-presence "
+              f"@<= {args.map_fill_max_distance:g}m front; "
               f"gap-mode={args.fill_mode}, max_gap_frames={args.max_gap_frames})")
 
     # With --frames we only render overlays; don't clobber the full-run tables

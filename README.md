@@ -29,7 +29,7 @@ relation is never persisted — it is re-derived from the lanelet2 map at eval t
 | **L1 inference** | detect + classify signals on an image directory | images -> Tier A (`tlr_autolabel/v1` per-frame JSON) | `tlr_autolabel.py` |
 | **L2 standardize (A→B)** | convert autolabel to the **standard t4 `object_ann.json`** (the solid IF): bbox + db_tlr `category` + `occlusion`/`truncation` attributes + optional empty 2D `instance`; the optional map-signal id goes to a separate sidecar | Tier A (or A') -> Tier B (`object_ann.json` + `category`/`attribute`) [+ `traffic_light_map_association.json` for B'] | `to_object_ann.py` |
 | **L3 map enrichment (A→A')** | map association (lanelet2 way + RE) + multi-camera/head fusion; an **internal** enrichment used for review/QA, eval-time re-derivation, and to fill B' | Tier A + T4 map -> Tier A' (`traffic_signal_2d/v2` sidecar) + `traffic_signal_re/v1` | `match_traffic_lights.py`, `aggregate_regulatory_signals.py`, `render_re_timeline.py` |
-| **L4 review UI** | human correction that turns provisional A' into a confirmed Tier B: per-frame box / state / occlusion / truncation (CVAT), and RE state-intervals (timeline) | Tier A'/B -> reviewed Tier B | CVAT pair (`export_cvat_signal_task.py`/`import_cvat_signal_annotations.py`, `docs/cvat_interop.md`) + RE review (`make_re_review_template.py`, `render_re_review_timeline.py`, `apply_re_review.py`, `docs/re_timeline_review.md`) |
+| **L4 review UI** | human correction that turns provisional A' into reviewed GT: per-frame box / state / visibility / map id (CVAT), and RE state-intervals (timeline); reviewed A' can then be standardized to B/B' | Tier A' -> reviewed A' -> Tier B/B' | CVAT pair (`export_cvat_signal_task.py`/`import_cvat_signal_annotations.py`, `docs/cvat_interop.md`) + RE review (`make_re_review_template.py`, `render_re_review_timeline.py`, `apply_re_review.py`, `docs/re_timeline_review.md`) |
 | _(downstream)_ | AWML info / Deepen / CVAT / COCO **from** standard `object_ann` | Tier B -> external formats | **existing t4devkit / webauto tooling — not maintained here** |
 | **L5 ros2 verification** | score the live Autoware node against our GT (detection + classification) | node rosbag -> `tlr_autolabel/v1` -> eval | `ros2_pipeline/`, `bag_to_labels.py`, `docs/eval_design.md` |
 | **L6 evaluation** | metrics vs GT: detection P/R/IoU + classification accuracy + confusion (two-source), plus the ledger profiles; RE level via driving_log_replayer_v2 | pred + GT -> `tlr_eval*` reports | `eval_vs_gt.py`, `evaluate_signals.py` |
@@ -60,6 +60,12 @@ truncation, 2D instance}`. Prime adds `{map_traffic_light_id}` (optional).
 | **B** | standard t4 `object_ann.json` (+ `category`/`attribute`) | no | **the solid interface.** bbox + db_tlr `category` + `occlusion_state`/`truncation_state` + optional 2D `instance`. Consumed by AWML/Deepen/CVAT/COCO via existing tooling |
 | **B'** | B + `traffic_light_map_association.json` | yes | B plus the optional map-signal id (separate from the 2D instance); absent with no map. RE relation re-derived from the map, not stored |
 | **B-review** | `traffic_signal_re_review/v1` | — | human RE state-interval decisions; propagates into the reviewed annotation |
+
+In B/B', `object_ann.instance_token` is a standard T4 2D annotation instance,
+not a lanelet2 map id. The current converter assigns it from per-camera bbox
+continuity. Physical signal identity lives only in B'
+`traffic_light_map_association.json` as `object_ann_token ->
+map_traffic_light_id`.
 
 > **Lossy projection is deliberate.** Tier A keeps full lamp detail; the A→B
 > `category` is the db_tlr projection (per `configs/state_vocab/db_tlr.yaml`) and
@@ -448,7 +454,7 @@ Or stage by stage:
 
 ```bash
 # 1) associate detections with lanelet2 traffic_light ways (Hungarian matching
-#    on projected boxes) and resolve regulatory elements -> Tier B sidecar.
+#    on projected boxes) and resolve regulatory elements -> A' sidecar.
 #    v1 labels are looked up by sample_data_token (file naming irrelevant);
 #    both flat CHANNEL_frame.json dirs and per-channel subdirs are accepted.
 python3 match_traffic_lights.py --dataset-root <dataset>
@@ -496,32 +502,37 @@ Fusion repair policies (decided 2026-07-19):
   these — they are not detections, so they never enter the prediction side of
   evaluation.)
 - **Map-presence backfill** (`--map-fill`, default on; `--map-fill-max-distance`
-  50m, front-facing only): a near signal the detector missed *entirely* still
-  gets an `unknown` box at its projected map position — but only where a real
-  detection of the *same* signal within `--map-fill-window` frames corroborates
-  the projection. Without that guard the map alone drops boxes on occluded /
-  mis-projected empty regions (verified: blind map-fill put boxes on empty sky).
-  Boxes are clipped to the image and dropped if mostly off-frame; position
-  carries the map projection's ~10-20px offset (no detection to snap to), so
-  they are `unknown`/`source_type=map_presence` for review, not final GT.
+  130m, front-facing only): a signal the detector missed between real
+  detections still gets an `unknown` box at its projected map position — but
+  only when detections of the *same* signal bracket the missed frame within
+  `--map-fill-window` frames on both sides. This avoids open-ended map
+  extrapolation after a signal leaves the image (for example through the top
+  edge), while still covering detector dropouts during an observed run. Boxes
+  are clipped to the image and dropped if mostly off-frame; position carries
+  the map projection's ~10-20px offset (no detection to snap to), so they are
+  `unknown`/`source_type=map_presence` for review, not final GT.
 - **Unmatched detections keep their info, not dropped silently**: the
   `unmatched_reason` and the nearest in-view map candidate
   (`map_candidate_id` / `regulatory_element_id_candidate`) are recorded on the
-  Tier B box (and in `build/tl_match/match_report.json`), so a real signal that
-  failed the geometric match still carries its likely RE for review. Reasons:
+  A' sidecar annotation (and in `build/tl_match/match_report.json`), so a real
+  signal that failed the geometric match still carries its likely RE for review.
+  Reasons:
   `state_unknown_backside` / `no_map_candidate_in_view` / `candidate_taken` /
   `beyond_gate` / `geometry_mismatch`.
 
-### Tier B schema: `traffic_signal_2d/v2` (per-detection sidecar)
+### A' sidecar schema: `traffic_signal_2d/v2` (per-detection)
 
 Written by `match_traffic_lights.py` to `annotation/traffic_signal_2d_ann.json`.
-This is the IF the L4 converters consume; the **attribute-level contract
-(types, defaults, edit rules) lives in `docs/cvat_interop.md`** — the summary
-below is for orientation. v1 read-fallback: `detector_signal` -> `raw_state`.
+This is the internal map-enriched IF the L4 review tools consume. Delivered
+Tier B remains standard T4 `object_ann.json`; optional B' map identity is stored
+in `annotation/traffic_light_map_association.json`. The **attribute-level
+contract (types, defaults, edit rules) lives in `docs/cvat_interop.md`** — the
+summary below is for orientation. v1 read-fallback: `detector_signal` ->
+`raw_state`.
 
 ```jsonc
 {
-  "schema_version": "traffic_signal_2d/v1",
+  "schema_version": "traffic_signal_2d/v2",
   "source": "map_projection_auto",        // or "manual" etc. for other producers
   "annotations": [
     {
@@ -542,7 +553,7 @@ below is for orientation. v1 read-fallback: `detector_signal` -> `raw_state`.
         "regulatory_element_id": "10302,10304",// comma-joined relation ids, "" if none
         "raw_state": "...",                    // detector state as emitted by L1
         "detector_score": "0.93",              // string; "" when absent
-        "source_type": "auto"                  // auto | cvat (manual round-trip)
+        "source_type": "auto"                  // manual | projected_map | auto | interpolated | map_presence
       }
     }
   ]
@@ -590,7 +601,7 @@ Written by `aggregate_regulatory_signals.py` to
 Written by `make_re_review_template.py` or exported from
 `render_re_review_timeline.py`, then applied by `apply_re_review.py`. This file
 is intentionally a sidecar: it records human decisions over physical signal
-groups and time intervals without overwriting the CVAT/Tier B geometry edits.
+groups and time intervals without overwriting the CVAT/A' geometry edits.
 
 Physical signal groups are keyed by the lanelet2 `traffic_light` member ways,
 not by a single regulatory element, because multiple RE relations can share the
@@ -624,7 +635,7 @@ same heads:
 
 Application rules:
 
-- `accepted` / `fixed` decisions overwrite Tier B `attributes.state`, derive
+- `accepted` / `fixed` decisions overwrite A' `attributes.state`, derive
   `signal_kind`, and set `review_status`.
 - `rejected` decisions set only `review_status=rejected`.
 - `unchecked` decisions are retained in review JSON but are not applied.
@@ -633,7 +644,7 @@ Application rules:
 
 The normal human loop is: CVAT first for bbox/visibility/reject/map-id fixes,
 then re-run aggregation, then RE timeline review for state intervals, then
-`apply_re_review.py` to produce the reviewed Tier B sidecar consumed by L6.
+`apply_re_review.py` to produce the reviewed A' sidecar consumed by L6.
 
 ### Map-less T4 `object_ann.json` GT evaluation
 

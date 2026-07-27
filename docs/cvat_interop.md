@@ -1,15 +1,15 @@
-# CVAT interop contract (L4, Tier B <-> Tier C)
+# CVAT interop contract (L4, A' sidecar <-> CVAT)
 
 信号アノテーションのCVAT往復(人手検証ラウンド)の契約。ツール:
-`export_cvat_signal_task.py`(Tier B → CVATタスクzip)/
-`import_cvat_signal_annotations.py`(CVAT XML → Tier B)。
+`export_cvat_signal_task.py`(A' sidecar → CVATタスクzip)/
+`import_cvat_signal_annotations.py`(CVAT XML → A' sidecar)。
 状態語彙は README の正準stateトークン仕様(`{color}-{shape}[-{direction}]`、
 ソート・カンマ結合)を全属性で共有する。
 
 確定日: 2026-07-19(タスク1)。旧契約(dataset側
 `docs/cvat_signal_interop_spec.md` の select型 `state`)はこの版で置き換え。
 
-## Tier B sidecar: `traffic_signal_2d/v2`
+## A' sidecar: `traffic_signal_2d/v2`
 
 `annotation/traffic_signal_2d_ann.json`。v1からの変更は `attributes` の契約のみ
 (テーブル構造は不変)。v1読み込みフォールバック: `raw_state` が無ければ
@@ -47,7 +47,7 @@
 | `facing` | text | `front` `back` / 導出値(未マッチは空) | しない | 灯器面の向き(linestring方向-90°回転の法線、本地図で実証済み)。`back` は筐体裏面の検出 — colored stateなら誤対応疑い |
 | `raw_state` | text | autolabelの元state | しない | 検出器の原文。人手修正後も不変(diff用) |
 | `detector_score` | text | 検出スコア / 空(手動box) | しない | provenance |
-| `source_type` | select | `manual` `projected_map` `auto` `interpolated` / CVAT新規box=`manual`(先頭)、自動生成分は `auto` 値で出力 | しない | 由来の区別 |
+| `source_type` | select | `manual` `projected_map` `auto` `interpolated` `map_presence` / CVAT新規box=`manual`(先頭)、自動生成分は `auto` 値で出力 | しない | 由来の区別 |
 | `annotation_uid` | text | sidecar token | しない | 往復キー。空の新規boxはimportで採番 |
 | `map_candidate_id` | text | 最近傍候補way id / 空 | しない | 未マッチ検出の**軟対応**。誤対応の手掛かり(authoritativeな `map_traffic_light_id` は空のまま) |
 | `regulatory_element_id_candidate` | text | 候補wayのRE / 空 | しない | 同上。未マッチでもRE情報を残す |
@@ -64,7 +64,7 @@
   CVAT上の `state` は局所修正・互換・diff表示のために残すが、複数フレーム/
   複数カメラ/複数REにまたがる信号状態は
   `traffic_signal_re_review/v1`(`docs/re_timeline_review.md`)で
-  `signal_group_id` と時間区間に対して管理し、`apply_re_review.py` で Tier B へ
+  `signal_group_id` と時間区間に対して管理し、`apply_re_review.py` で A' sidecar へ
   伝播する。CVATは bbox / visibility / reject / map id 修正に集中させる。
 - **`regulatory_element_id` は導出値**: 1つのTL wayを複数レーンのregulatory
   elementが共有するため人手管理は誤りやすい。importが地図から再計算する。

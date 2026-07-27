@@ -1,6 +1,7 @@
 # TLR evaluation design — evaluating the live ROS node against our GT
 
-Goal: use the GT built by this repo (Tier B boxes+state, RE time series) to
+Goal: use the GT built by this repo (reviewed A' boxes+state, optionally
+derived from Tier B/B', plus RE time series) to
 evaluate the **actual Autoware ROS node pipeline** at three decoupled levels:
 
 1. **ROI / detection** — did the detector find the signal boxes?
@@ -19,14 +20,14 @@ runs; GT is shared. So we reuse L3 (`match_traffic_lights.py`) and L6
 ```
 ROS node graph ──topics──► collector ──► node run in tlr_autolabel/v1 (+ RE)
                                               │
-GT (reviewed Tier B + RE timeseries) ─────────┤
+GT (reviewed A' + RE timeseries) ─────────────┤
                                               ▼
                              two-source evaluator (join by IoU / RE id + time)
                              → detection P/R/IoU · state accuracy · RE accuracy
 ```
 
 `ros2_pipeline/tlr_label_collector.py` already emits `tlr_autolabel/v1`, so a
-node run flows straight into `match_traffic_lights.py` → Tier B, exactly like an
+node run flows straight into `match_traffic_lights.py` -> A', exactly like an
 offline run. What's new is a **two-source evaluator** that joins a *prediction*
 run (node) to a *GT* run (reviewed offline) — the current
 `evaluate_signals.py` GT block lives inside one sidecar (review_status), which
@@ -36,8 +37,8 @@ is fine for "offline vs its own review" but not for "node vs GT".
 
 | level | node output (topic) | GT source | join key | metrics |
 |---|---|---|---|---|
-| **1 detection** | detected ROIs (boxes) — `.../detection/rois` | reviewed Tier B boxes that are real (accepted/fixed; rejected excluded) | per frame, box IoU | precision, recall, IoU dist, by distance/facing/visibility; missed signals, false ROIs |
-| **2 classification** | per-ROI state — `.../classification/{car,pedestrian}/traffic_signals` (keyed by traffic_light_id) | reviewed Tier B `state` (legible only: visibility full/partial) | frame + matched ROI (or GT ROI) | state accuracy given a correct ROI; color/shape/arrow confusion; by distance/visibility. **decoupled from detection** |
+| **1 detection** | detected ROIs (boxes) — `.../detection/rois` | reviewed A' boxes that are real (accepted/fixed; rejected excluded) | per frame, box IoU | precision, recall, IoU dist, by distance/facing/visibility; missed signals, false ROIs |
+| **2 classification** | per-ROI state — `.../classification/{car,pedestrian}/traffic_signals` (keyed by traffic_light_id) | reviewed A' `state` (legible only: visibility full/partial) | frame + matched ROI (or GT ROI) | state accuracy given a correct ROI; color/shape/arrow confusion; by distance/visibility. **decoupled from detection** |
 | **3 RE / merge** | final per-RE `TrafficSignalArray` after map assoc + multi-camera fusion + arbiter (keyed by regulatory_element_id) | RE timeseries GT (`traffic_signal_re/v1`, human-reviewed via the time-series tool) | regulatory_element_id + timestamp (nearest) | per-RE state accuracy over time, state-change latency, flip/stability vs GT segments |
 
 
@@ -99,7 +100,7 @@ The Autoware classifier takes `rois` as input, so we can run it two ways:
 Reuse:
 - `ros2_pipeline/` feeder + collector (node output → `tlr_autolabel/v1`) and
   `parity_check.py` (node vs offline boxes/states).
-- `match_traffic_lights.py` (node run → Tier B, map association) and
+- `match_traffic_lights.py` (node run -> A', map association) and
   `evaluate_signals.py` ledgers/profiles.
 
 New:
