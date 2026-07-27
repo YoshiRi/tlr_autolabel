@@ -155,7 +155,14 @@ annotationの存在で自動有効化。
       現行実装は map relation がある場合だけ `traffic_light.json` を出力し、無ければ未生成/削除してTier Bにする。
       移行互換として deprecated `traffic_light_map_association.json` は `--write-deprecated-map-association` 明示時だけ一時出力。
 - [ ] t4devkit側: `traffic_light.json` table/schema/validation を定義し、B/B'判定を `traffic_light.json` 有無に統一する。
-- [ ] 変換/adapter側: DLR向け形式は `traffic_light.json` + map から TLR ID ベースへ変換する。deprecated association は読まない。
+- [x] RE-based annotation adapter: `export_re_to_t4dataset.py` を追加。`traffic_signal_re_review/v1`
+      または `traffic_signal_re/v1` をA' geometry sidecarへ適用し、`to_object_ann.py` で標準t4dataset B/B'へ変換。
+      unchecked templateをannotationとして昇格する場合は `--unchecked-as accepted` を明示。中間A'はtemporaryでdefault削除。
+- [x] object_ann-based annotation adapter: `export_object_ann_to_t4dataset.py` を追加。既存
+      `object_ann.json` を保持し、deprecated `traffic_light_map_association.json` を
+      t4devkit定義 `traffic_light.json` へ正規化。複数linestringにまたがる2D instanceは
+      deterministicに分割し、`instance_name` へmap/TLR IDを入れない。
+- [ ] DLR adapter側: `traffic_light.json` + map から TLR ID ベースへ変換する。deprecated association は読まない。
 - [x] `to_object_ann.py` 追加検証: 1つの `instance_token` が複数 `traffic_light_linestring_id` に張られないよう
       tracking時に異なるmap idの結合を禁止し、出力前にもfail-loud検証を追加(現IFでは通常1 instance = 1 map linestringを期待)。
 - [x] L2 IF smoke(2026-07-27): `/tmp/tlr_l2_if_test.czPyGT` に cb7fd5c0 dataset の軽量コピー(annotation実体、
@@ -163,6 +170,17 @@ annotationの存在で自動有効化。
       B': 1766 object_ann / 228 instance / 110 traffic_light relation、schema key一致、instance/map参照欠落0、
       deprecated associationはdefault非出力。B: map id除去sidecarで `traffic_light.json` 未生成。
       同一out再利用でもB'→B再変換で stale `traffic_light.json` 削除確認。
+- [x] RE→t4dataset smoke(2026-07-27): c1af6a38 dataset を入力に `/tmp/tlr_re_to_t4_c1af.C6xTDA` へ派生出力。
+      `annotation/traffic_signal_re_review.template.json --unchecked-as accepted` と
+      `annotation/traffic_signal_re_timeseries.json` の両経路が成功。出力は 2906 object_ann / 1346 instance
+      (3D 284保持 + TLR 1062) / 839 traffic_light relation、schema key一致、instance/map参照欠落0、
+      ambiguous instance 0、deprecated association非生成。data/input_bag/map/tlr_autolabel はsymlink参照。
+- [x] 2パターン出力 smoke(2026-07-27): `/tmp/tlr_two_patterns_c1af.hX9aJb` に
+      `01_re_object_ann_base`(既存object_ann正規化: 2906 object_ann / 1344 instance /
+      837 traffic_light、旧ambiguous 6 instanceを101行だけsplit) と
+      `02_re_plus_autolabel`(RE review templateをaccepted昇格してA'へ適用: 2906 object_ann /
+      1346 instance / 839 traffic_light) を生成。両方ともschema key一致、instance/map参照欠落0、
+      ambiguous instance 0、deprecated association非生成。
 - [x] 実GT初測定(ad266d7c 人手object_ann 518箱 vs L1): 検出 P=0.58 R=0.85、状態精度0.75、最大誤り=分類器のX→unknown
 - [x] export_awml/export_labels を `deprecated/` へ移動(実行時警告+deprecated/README、参照ゼロ確認)。
       deepen.yaml=reference-only注記、doc参照をto_object_annに修正。README/STATUSのレイヤ改訂も反映

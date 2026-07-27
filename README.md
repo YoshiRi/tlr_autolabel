@@ -666,6 +666,48 @@ The normal human loop is: CVAT first for bbox/visibility/reject/map-id fixes,
 then re-run aggregation, then RE timeline review for state intervals, then
 `apply_re_review.py` to produce the reviewed A' sidecar consumed by L6.
 
+### object_ann-based annotation -> t4dataset B/B'
+
+`export_object_ann_to_t4dataset.py` normalizes existing object_ann-based
+annotation into the current B/B' IF without re-running Autolabel. It preserves
+`object_ann.json` rows, consumes deprecated
+`traffic_light_map_association.json` when present, and writes t4devkit-defined
+`traffic_light.json`.
+
+If an existing 2D `instance_token` spans multiple map linestring IDs, the adapter
+splits only those image instances deterministically before writing
+`traffic_light.json`. New `instance_name` values do not encode map/TLR IDs.
+The deprecated association file is not written to the derived output.
+
+```bash
+python3 export_object_ann_to_t4dataset.py \
+  --dataset-root <dataset> \
+  --out /tmp/object_ann_to_t4_out
+```
+
+### RE-based annotation -> t4dataset B/B'
+
+`export_re_to_t4dataset.py` is a reusable adapter for RE-based annotation data.
+It applies `traffic_signal_re_review/v1` decisions, or derives decisions from
+`traffic_signal_re/v1`, onto the 2D geometry/map sidecar and then runs the L2
+converter. The output is standard t4dataset B/B': `object_ann.json`,
+`category.json`, `attribute.json`, `instance.json`, and `traffic_light.json`
+when map relations exist.
+
+```bash
+python3 export_re_to_t4dataset.py \
+  --dataset-root <dataset> \
+  --review annotation/traffic_signal_re_review.json \
+  --out /tmp/re_to_t4_out
+
+# To intentionally promote an unchecked template as annotation data:
+python3 export_re_to_t4dataset.py \
+  --dataset-root <dataset> \
+  --review annotation/traffic_signal_re_review.template.json \
+  --unchecked-as accepted \
+  --out /tmp/re_to_t4_out
+```
+
 ### Map-less T4 `object_ann.json` GT evaluation
 
 Some evaluator datasets are nuScenes/T4-derived 2D GT only: state is encoded as
