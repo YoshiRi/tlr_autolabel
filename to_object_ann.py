@@ -11,12 +11,12 @@ consumes them -- we don't maintain those converters. B holds only:
                    (2D bbox tracking, greedy IoU per camera) + mask
                    (box-rectangle RLE; --no-masks for null)
   instance.json    the tracked 2D instances (token, category, name, counts)
-  traffic_light.json  2D instance -> lanelet2 traffic-light linestring relation
+  traffic_light_instance_map.json  2D instance -> lanelet2 traffic-light linestring relation
   category.json    source categories + the db_tlr state categories used
   attribute.json   occlusion_state.{none,partial,most} + truncation_state.{...}
 
 Map linkage is a SEPARATE relation, distinct from the 2D instance name. The B'
-target is t4devkit-defined `traffic_light.json`:
+target is t4devkit-defined `traffic_light_instance_map.json`:
 
   {"token": ..., "instance_token": ..., "traffic_light_linestring_id": ...}
 
@@ -113,7 +113,7 @@ def assign_instances(records, sd_meta):
         items.sort()
         # (instance_token, last_box, first_ann_uid, category, last_ts, map_id)
         # The instance remains a 2D image identity, but a single instance cannot
-        # point to multiple map linestrings in traffic_light.json. Preventing
+        # point to multiple map linestrings in traffic_light_instance_map.json. Preventing
         # incompatible map merges here keeps the relation table unambiguous.
         active = []
         last_ts = None
@@ -154,8 +154,24 @@ VOCAB_PATH = os.path.join(HERE, "configs", "state_vocab", "db_tlr.yaml")
 # them by name): occlusion_state is lowercase, Truncation_State is capitalized.
 OCCLUSION = {"full": "none", "partial": "partial", "occluded": "most", "unknown": "none"}
 TRUNCATION_DEFAULT = "Truncation_State.non-truncated"
+TRUNCATION_EDGE = "Truncation_State.truncated"
+# A signal facing away (back of the housing) shows no readable lamp. There is no
+# native t4 facing axis, so per the agreed contract it maps to occlusion_state.most
+# ("state not determinable"); it also reads as light_status.off (no lit lamp).
+FACING_AWAY_OCCLUSION = "occlusion_state.most"
+TRUNCATION_EPS = 2.0  # px: box within this of an image border counts as truncated
 ATTRIBUTES = ["occlusion_state.none", "occlusion_state.partial", "occlusion_state.most",
-              "Truncation_State.non-truncated", "Truncation_State.truncated"]
+              "Truncation_State.non-truncated", "Truncation_State.truncated",
+              "light_status.on", "light_status.off"]
+
+
+def truncation_attr(box, w, h):
+    """Truncated when the box touches/exceeds an image border (matches the
+    reference dataset semantics, verified: truncated boxes sit at coord 0/W/H)."""
+    x0, y0, x1, y1 = box
+    if x0 <= TRUNCATION_EPS or y0 <= TRUNCATION_EPS or x1 >= w - TRUNCATION_EPS or y1 >= h - TRUNCATION_EPS:
+        return TRUNCATION_EDGE
+    return TRUNCATION_DEFAULT
 
 
 def load_vocab():
@@ -187,17 +203,22 @@ def token_of(*parts):
 
 
 def load_records(args):
-    """Yield (sample_data_token, box_xyxy, elements, visibility, map_id, uid).
-    elements = canonical lamp dicts; map_id/visibility may be None."""
+    """Yield (sample_data_token, box_xyxy, elements, visibility, map_id, uid, facing).
+    elements = canonical lamp dicts; map_id/visibility/facing may be None."""
+    drop_sources = {s.strip() for s in (getattr(args, "drop_source_types", "") or "").split(",") if s.strip()}
     if args.sidecar:
         data = json.load(open(args.sidecar))
         anns = data["annotations"] if isinstance(data, dict) else data
         for a in anns:
             at = a.get("attributes", {})
+            if at.get("source_type") in drop_sources:
+                # unverified map-projected / gap-filled review aids stay in the
+                # L3 sidecar but are excluded from the delivered Tier B object_ann
+                continue
             state = at.get("state") or at.get("raw_state") or ""
             yield (a["sample_data_token"], a["box2d"], parse_state(state),
                    at.get("visibility"), at.get("map_traffic_light_id") or None,
-                   a.get("token"))
+                   a.get("token"), at.get("facing") or None)
     else:
         for p in sorted(glob.glob(os.path.join(args.autolabel_dir, "**", "*.json"),
                                   recursive=True)):
@@ -208,7 +229,7 @@ def load_records(args):
                 elements = [{"color": l["color"], "shape": l["shape"], "arrow": l.get("arrow")}
                             for l in s.get("lamps", [])]
                 yield (d["sample_data_token"], s["box_xyxy"], elements, None, None,
-                       s.get("signal_id") or f"{d.get('frame_index')}-{i}")
+                       s.get("signal_id") or f"{d.get('frame_index')}-{i}", None)
 
 
 def main():
@@ -225,10 +246,16 @@ def main():
                          "placeholder: the working-dataset placeholder RLE (renders a big "
                          "fill in t4devkit). real: box-rectangle pycocotools RLE (not "
                          "decoded by t4devkit).")
+    ap.add_argument("--drop-source-types", default="map_presence,interpolated",
+                    help="comma-separated sidecar source_type values to exclude from the "
+                         "delivered object_ann (default: map_presence,interpolated). These "
+                         "unverified map-projected / gap-filled boxes stay in the L3 sidecar "
+                         "but are kept out of the Tier B GT (only real 'auto' detections "
+                         "remain). Pass '' to keep every source_type.")
     ap.add_argument("--write-deprecated-map-association", action="store_true",
                     help="temporary compatibility only: also write deprecated "
                          "traffic_light_map_association.json. New consumers must use "
-                         "traffic_light.json.")
+                         "traffic_light_instance_map.json.")
     args = ap.parse_args()
     if bool(args.autolabel_dir) == bool(args.sidecar):
         raise SystemExit("give exactly one of --autolabel-dir / --sidecar")
@@ -242,7 +269,7 @@ def main():
     # These tables we (re)generate. Everything else — crucially
     # sample_annotation.json (3D boxes) and its ego_pose etc. — is untouched.
     generated = {"object_ann.json", "category.json", "attribute.json",
-                 "instance.json", "traffic_light.json",
+                 "instance.json", "traffic_light_instance_map.json",
                  "traffic_light_map_association.json"}
 
     if args.in_place:
@@ -304,7 +331,7 @@ def main():
 
     # gather records (with db_tlr category), assign 2D instances, then emit
     records, counts = [], {}
-    for sd_token, box, elements, vis, map_id, uid in load_records(args):
+    for sd_token, box, elements, vis, map_id, uid, facing in load_records(args):
         name = db_tlr_state(elements, vocab)
         if name not in cat_token:
             cat_token[name] = token_of("category", name)
@@ -312,7 +339,8 @@ def main():
                                "description": "db_tlr state (tlr_autolabel)",
                                "index": None, "has_orientation": False, "has_number": False})
         records.append({"sd": sd_token, "box": [float(v) for v in box], "vis": vis,
-                        "map_id": map_id, "uid": uid, "cat": name})
+                        "map_id": map_id, "uid": uid, "cat": name,
+                        "facing": facing, "lit": bool(elements)})
         counts[name] = counts.get(name, 0) + 1
 
     inst_of, instances = assign_instances(records, sd_meta)
@@ -323,9 +351,13 @@ def main():
     for i, r in enumerate(records):
         x0, y0, x1, y1 = r["box"]
         oa_token = token_of("object_ann", r["sd"], r["uid"], x0, y0, x1, y1)
-        occ = "occlusion_state." + OCCLUSION.get(r["vis"] or "unknown", "none")
-        attrs = [attr_token[occ], attr_token[TRUNCATION_DEFAULT]]
         w, h = sd_wh.get(r["sd"], (2880, 1860))
+        # occlusion: facing-away overrides to "most" (no readable lamp); else from visibility
+        occ = (FACING_AWAY_OCCLUSION if r.get("facing") == "back"
+               else "occlusion_state." + OCCLUSION.get(r["vis"] or "unknown", "none"))
+        trunc = truncation_attr(r["box"], w, h)
+        light = "light_status.on" if (r["lit"] and r.get("facing") != "back") else "light_status.off"
+        attrs = [attr_token[occ], attr_token[trunc], attr_token[light]]
         instance_token = inst_of.get(i)
         rec = {
             "token": oa_token,
@@ -385,7 +417,7 @@ def main():
     json.dump(categories, open(os.path.join(ann_out, "category.json"), "w"), indent=2)
     json.dump(attributes, open(os.path.join(ann_out, "attribute.json"), "w"), indent=2)
     json.dump(final_instances, open(os.path.join(ann_out, "instance.json"), "w"), indent=2)
-    traffic_light_path = os.path.join(ann_out, "traffic_light.json")
+    traffic_light_path = os.path.join(ann_out, "traffic_light_instance_map.json")
     if traffic_light:
         json.dump(traffic_light, open(traffic_light_path, "w"), indent=2)
     elif os.path.exists(traffic_light_path):
@@ -401,7 +433,7 @@ def main():
           f"= {len(final_object_ann)} | instances: {len(kept_instances)} 3D + "
           f"{len(instances)} TLR 2D = {len(final_instances)} | masks: {args.mask}")
     print(f"traffic_light relations: {len(traffic_light)} "
-          f"({'wrote traffic_light.json' if traffic_light else 'traffic_light.json absent -> Tier B'})")
+          f"({'wrote traffic_light_instance_map.json' if traffic_light else 'traffic_light_instance_map.json absent -> Tier B'})")
     if args.write_deprecated_map_association:
         print(f"deprecated legacy map associations: {len(assoc)}")
     for name, n in sorted(counts.items(), key=lambda t: -t[1]):

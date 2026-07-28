@@ -58,7 +58,7 @@ node bag ──bag_to_labels.py──► tlr_autolabel/v1 (roi box + classified 
    (TrafficLightRoiArray            time-aligned to GT keyframes, ±75ms)
     + TrafficLightArray)              │
                                       ▼  match_traffic_lights.py
-                                 node Tier B
+                                 node A' sidecar
                                       │  eval_vs_gt.py --gt <reviewed GT>
                                       ▼
                     detection P/R/IoU by distance (level 1) +
@@ -131,7 +131,7 @@ the bag-driven run we align node output to the nearest GT keyframe timestamp.
 
 ## Phasing
 
-1. **Phase 1 (now, provisional GT)**: detector-driven harness → node Tier B →
+1. **Phase 1 (now, provisional GT)**: detector-driven harness → node A' sidecar →
    `eval_vs_gt.py` for detection P/R + classification accuracy. Validate the
    machinery against provisional GT and existing parity_check.
 2. **Phase 2**: classifier-isolated (GT-ROI feeder) → pure classification

@@ -17,14 +17,14 @@ Per-lamp questions need a row per lamp. All three carry shared join keys
 (`sample_data_token`, `way_id`, `det_token`) for external re-joining (pandas,
 duckdb, etc.).
 
-## `eval_detections.jsonl` — unit: one detected box (Tier B annotation)
+## `eval_detections.jsonl` — unit: one detected/reviewed A' box
 
 Precision side, state/unknown rates, and (when reviewed) state accuracy.
 
 | column | meaning |
 |---|---|
 | `row_id` | row index within the file |
-| `det_token` | Tier B annotation token (join key) |
+| `det_token` | A' annotation token (join key) |
 | `sample_token` / `sample_data_token` | T4 frame identity (join keys) |
 | `channel` | camera channel |
 | `timestamp` | frame timestamp (µs) |

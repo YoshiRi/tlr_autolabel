@@ -3,3 +3,8 @@ __pycache__/
 trt_run
 # local eyeball-check renders (36MB of PNGs; regenerate with --viz)
 sample_preview/
+
+# local generated dataset snapshots for manual inspection
+data/*
+!data/README.md
+!data/.gitkeep

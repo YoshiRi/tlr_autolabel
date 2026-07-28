@@ -3,7 +3,7 @@
 作業計画の単一管理ファイル。タスクの追加・完了・方針変更はここを更新する。
 設計の契約は README.md 冒頭(処理層 / Tier A-C + B-review)。矛盾時は README を正とする。
 
-最終更新: 2026-07-27
+最終更新: 2026-07-28
 
 ## ✅ 完了(日付順)
 
@@ -18,13 +18,14 @@
 | 07-18 | detector プリセット(`configs/detectors/`、`--preset` / `--no-tiles` / `meta.preset`) |
 | 07-19 | スタンドアロンリポジトリ化(github.com/YoshiRi/tlr_autolabel, private)。launcher リポジトリは原状復帰済み(force-push 完了) |
 | 07-19 | **c1af6a38 データセットの本番再ラベル**: 3カメラ×578f を int8+tiles で v1 再生成・設置(旧 fp32 ラベルは `build/tlr_autolabel_fp32_backup_20260719/`) |
-| 07-19 | **Tier B 再生成**: 地図マッチ 12.9%→**77.5%**、unknown 81%→29%、正準語彙化(旧 sidecar は `build/traffic_signal_2d_ann.fp32_backup_20260719.json`) |
+| 07-19 | **A' sidecar 再生成**: 地図マッチ 12.9%→**77.5%**、unknown 81%→29%、正準語彙化(旧 sidecar は `build/traffic_signal_2d_ann.fp32_backup_20260719.json`) |
 | 07-19 | **L3 3工程をリポジトリへ移植**: `match_traffic_lights.py` / `aggregate_regulatory_signals.py` / `render_re_timeline.py` + 共通パーサ `state_tokens.py`。IF修整(sample_data_token でフレーム解決、正準+旧形式両対応、amber↔yellow は地図比較境界のみ)。リグレッション一致(978/758)。dataset 側 `tools/` に残るは CVAT 往復ペア(L4)のみ |
 | 07-19 | **8倍高速化**: 非連続配列 tofile(399ms/パス)修正 + yolox デコードのベクトル化。6.4s → 0.78s/frame(出力ビット一致) |
 | 07-19 | L1 の新モデル試走対応: 多クラス yolox 一般化、動的shape/未知ファミリの明示エラー、プリセット env var 展開、README に flexibility contract(tiles はオプトイン) |
 | 07-19 | **L4 CVAT往復を当リポジトリへ移植 + 契約v2**: 属性契約 `docs/cvat_interop.md`(`traffic_signal_2d/v2`: 正準state text + signal_kind/visibility/review_status + raw_state/detector_score。circle/arrow select分解は不採用=同時多方向矢印・二重管理回避)。importはfail-loud検証(stateトークン文法・way id実在・RE id再導出)。往復ロスレス(CAM_FRONT 299/299)、aggregator v2回帰OK。dataset側の旧ペア・旧specはMOVED注記済み(削除可) |
-| 07-21 | **L4.5 RE timeline review基盤**: CVATのbbox/visibility修正と分離し、信号状態を物理信号グループ(`member_ways`)×時系列区間でレビューする `traffic_signal_re_review/v1` を追加。`render_re_review_timeline.py`(静的HTML編集UI)、`make_re_review_template.py`(ひな形生成)、`apply_re_review.py`(Tier Bへ伝播) + `docs/re_timeline_review.md`。c1af6a38既存autolabelで smoke: 24 RE→8 group、62 segment、2376/2793 annotationへaccepted伝播、再aggregate成功 |
+| 07-21 | **L4.5 RE timeline review基盤**: CVATのbbox/visibility修正と分離し、信号状態を物理信号グループ(`member_ways`)×時系列区間でレビューする `traffic_signal_re_review/v1` を追加。`render_re_review_timeline.py`(静的HTML編集UI)、`make_re_review_template.py`(ひな形生成)、`apply_re_review.py`(A' sidecarへ伝播) + `docs/re_timeline_review.md`。c1af6a38既存autolabelで smoke: 24 RE→8 group、62 segment、2376/2793 annotationへaccepted伝播、再aggregate成功 |
 | 07-27 | **B/B' IF再整理**: B' の差分を t4devkit 定義 `annotation/traffic_light.json` の有無に固定。schema は `{token, instance_token, traffic_light_linestring_id}`。RE/group は map から解決。`traffic_light_map_association.json` は temporary/deprecated と明記し、新規consumer禁止 |
+| 07-28 | **B/B' IF文書の再明確化**: B/B'の正しいt4dataset IFは `object_ann.json` 系 + `traffic_light.json` のみと再確認。`traffic_signal_2d/v2` / `traffic_signal_re/v1` / `traffic_signal_re_review/v1` / `traffic_light_map_association.json` はこのRepo内のA/A'側またはtemporary/deprecated sidecarであり、B/B'判定・納品IFには含めない。 |
 
 ## 📋 残タスク(実行順)
 
@@ -55,7 +56,7 @@
 - [x] `traffic_signal_re_review/v1` 契約を `docs/re_timeline_review.md` に固定
 - [x] `make_re_review_template.py`: `traffic_signal_re/v1` から review JSON ひな形生成
 - [x] `render_re_review_timeline.py`: 静的HTMLでsegment選択→代表crop候補切替→accepted/fixed/rejected→JSON export
-- [x] `apply_re_review.py`: review JSON をCVAT import済みTier Bに重ね、`state`/`signal_kind`/`review_status`だけ伝播
+- [x] `apply_re_review.py`: review JSON をCVAT import済みA' sidecarに重ね、`state`/`signal_kind`/`review_status`だけ伝播
 - [x] c1af6a38既存成果物でsmoke test(推論再走なし): accepted仮template 62 decisions → 2376 annotations更新、overlap 0、再aggregate成功
 - [ ] 実レビュー運用: CVATでbbox/visibilityを直した後、RE timeline reviewでstateを確定し、L6 GT指標を初回算出
 
@@ -80,20 +81,20 @@ annotationの存在で自動有効化。
       colored state(灯火が読めた)マッチに限定した検証で **linestring方向を-90°回転した
       法線が正面**(coloredマッチの99%が同側)と実証。逆側のマッチは筐体裏面の
       `unknown` 検出だった(=「点順序不定」に見えた原因)。実装: 候補を front/back に
-      分類(edge-onは除外)、Tier B に `facing` 属性、backでcolored stateなら
+      分類(edge-onは除外)、A' sidecar に `facing` 属性、backでcolored stateなら
       `colored_state_on_back_face` フラグ+重み降格(誤対応検出器として機能、38件)。
       カバレッジは front 検出可能候補のみで算出 — 0-60m 58-61% / 60-100m 44% /
       100-150m 14%(残余因 = 遮蔽・画端・真の検出漏れ)
 - [ ] レビュー取り込み後: `evaluate_signals.py` 再実行でGT指標(距離別正答率・要素P/R・FP/FN)を確認
-- 完了条件: レビュー済みTier Bと評価レポート(GTブロック有効)が dataset `build/` に存在
+- 完了条件: レビュー済みA' sidecarと評価レポート(GTブロック有効)が dataset `build/` に存在
 
 ### 2.7 暫定GT運用への移行(2026-07-21 ユーザー決定)
-- [x] 現状ベスト出力を凍結: `build/gt_provisional_20260721/`(Tier B + RE + match_report + MANIFEST)
+- [x] 現状ベスト出力を凍結: `build/gt_provisional_20260721/`(A' sidecar + RE + match_report + MANIFEST)
 - 位置づけ: **固定ベースライン**(evaluate_signals --baseline でのrun/モデル比較用)。人手未レビュー
   (review_status=unchecked)なので「自己整合の基準」であって精度GTではない。
 - 注意: 予測=autolabel自身を暫定GT=autolabel自身と比べると自明に一致 → 用途は「別設定/別モデルとの差分」。
 - 時系列・共有ヘッドのstateラベリングはCVAT不向き → ユーザーがCodexで補助ツール制作中(L4.5相当)。
-  完成したらそのツールとのIF(Tier B / RE timeseries)を整合させる。
+  完成したらそのツールとのIF(A' sidecar / RE timeseries)を整合させる。
 
 ### 2.8 モデル/設定比較(2026-07-22、暫定GTベースで初回)
 - [x] `compare_runs.py`: 複数label dirを同一地図でマッチ→距離ビン別 candidate_coverage
@@ -125,7 +126,7 @@ annotationの存在で自動有効化。
 - [ ] 暫定GT(0.5生成)は据え置き。次回全カメラ再ラベル時に0.35で更新
 ### 2.11 実ノード評価の設計(2026-07-22)
 - [x] 設計文書 `docs/eval_design.md`: 実ROSノードを3階層で評価
-      (①ROI検出 ②分類 ③マッチ+Merge後のRE)、GTは本repoのTier B+RE timeseries。
+      (①ROI検出 ②分類 ③マッチ+Merge後のRE)、GTは本repoのreviewed A' sidecar + RE timeseries。
 - 原理: ノード出力を正準形式(tlr_autolabel/v1 + RE)に変換 → オフラインと同じ
   L3/L6エンジンでGTと突合(評価器はソース非依存)。ros2_pipeline collector が既に
   tlr_autolabel/v1 を吐くので流用可。
@@ -151,10 +152,19 @@ annotationの存在で自動有効化。
   必要なRE/group relationは全てmapにあり、`traffic_light_linestring_id` から解決する。
 - temporary/deprecated: `traffic_light_map_association.json` は旧 `object_ann_token -> map_traffic_light_id`
   互換ファイル。現行IFに乗らないJSONなのでB/B'判定に使わず、新規consumerを追加しない。
+- repo-local sidecar: `traffic_signal_2d/v2` / `traffic_signal_re/v1` /
+  `traffic_signal_re_review/v1` はL3/L4/L6用のA/A'側IF。標準t4datasetのB/B'
+  ではなく、納品時は `to_object_ann.py` / adapters でB/B'へ変換する。
 - [x] `to_object_ann.py` 実装・検証: Tier A(autolabel-dir)/Tier A'(sidecar)両対応 → 標準object_ann+category+attribute+instance。
       現行実装は map relation がある場合だけ `traffic_light.json` を出力し、無ければ未生成/削除してTier Bにする。
       移行互換として deprecated `traffic_light_map_association.json` は `--write-deprecated-map-association` 明示時だけ一時出力。
-- [ ] t4devkit側: `traffic_light.json` table/schema/validation を定義し、B/B'判定を `traffic_light.json` 有無に統一する。
+- [x] t4devkit側(2026-07-27、`~/Documents/t4-devkit` main branch上): `SchemaName.TRAFFIC_LIGHT`(optional)
+      + `TrafficLight` テーブル(`{token, instance_token, traffic_light_linestring_id}`)を追加。
+      `t4_devkit.lanelet.regulatory_element` に `group_traffic_light_linestrings` /
+      `build_linestring_to_regulatory_element_index`(1 linestring : 1 RE を強制、違反は
+      `AmbiguousRegulatoryElementError`) / `find_ambiguous_traffic_light_linestrings`(全列挙版)を実装し、
+      `T4Devkit.regulatory_element_id_for_traffic_light_instance()` として公開。sanity checkerも追加
+      (`REF013`: instance_token参照整合性、`REF302`: linestring存在+RE一意性)。483 tests pass / ruff clean。
 - [x] RE-based annotation adapter: `export_re_to_t4dataset.py` を追加。`traffic_signal_re_review/v1`
       または `traffic_signal_re/v1` をA' geometry sidecarへ適用し、`to_object_ann.py` で標準t4dataset B/B'へ変換。
       unchecked templateをannotationとして昇格する場合は `--unchecked-as accepted` を明示。中間A'はtemporaryでdefault削除。
@@ -162,7 +172,20 @@ annotationの存在で自動有効化。
       `object_ann.json` を保持し、deprecated `traffic_light_map_association.json` を
       t4devkit定義 `traffic_light.json` へ正規化。複数linestringにまたがる2D instanceは
       deterministicに分割し、`instance_name` へmap/TLR IDを入れない。
-- [ ] DLR adapter側: `traffic_light.json` + map から TLR ID ベースへ変換する。deprecated association は読まない。
+- [x] perception_eval側(2026-07-27、`~/pilot-auto.x2/src/simulator/perception_eval`):
+      `traffic_light.json` + map から TLR ID(RE ID)へ解決するのは実際には DLR ではなく
+      `autoware_perception_evaluation`(`dataset_utils.py::_sample_to_frame_2d`)の役割だったため、
+      そちらに実装。新モジュール `perception_eval/common/tlr_relation.py` に
+      `TrafficLightIdResolver` protocol + `LegacyInstanceNameResolver`(旧
+      `instance_name` 末尾RE ID) + `TrafficLightLineStringResolver`(`traffic_light.json` +
+      map reverse-index)。resolverはdataset load時(`_load_dataset`)に1回だけ構築し
+      frame間で再利用、`_sample_to_frame_2d` はresolver経由に変更(`_merge_duplicated_traffic_lights`
+      は無変更)。map解析は t4-devkit の `build_linestring_to_regulatory_element_index` に委譲
+      (optional import — legacy datasetのみ使う場合は t4-devkit 不要)。`allow_legacy_tlr_fallback`
+      (既定False)を `load_all_datasets` まで貫通。`DynamicObject2D.uuid` は引き続きRE IDのため
+      DLR側(`driving_log_replayer_v2`)は変更不要と確認(`_EvaluationManagerBase.__init__` は
+      `dataset_paths` を渡すだけで map path 別引数は無い)。テスト16件追加、既存137件(t4-devkit導入後)
+      含め全パス。deprecated `traffic_light_map_association.json` はどちらの経路からも読まない。
 - [x] `to_object_ann.py` 追加検証: 1つの `instance_token` が複数 `traffic_light_linestring_id` に張られないよう
       tracking時に異なるmap idの結合を禁止し、出力前にもfail-loud検証を追加(現IFでは通常1 instance = 1 map linestringを期待)。
 - [x] L2 IF smoke(2026-07-27): `/tmp/tlr_l2_if_test.czPyGT` に cb7fd5c0 dataset の軽量コピー(annotation実体、
@@ -176,7 +199,7 @@ annotationの存在で自動有効化。
       (3D 284保持 + TLR 1062) / 839 traffic_light relation、schema key一致、instance/map参照欠落0、
       ambiguous instance 0、deprecated association非生成。data/input_bag/map/tlr_autolabel はsymlink参照。
 - [x] 2パターン出力 smoke(2026-07-27): `/tmp/tlr_two_patterns_c1af.hX9aJb` に
-      `01_re_object_ann_base`(既存object_ann正規化: 2906 object_ann / 1344 instance /
+      `01_re_object_ann_base`(旧associationありobject_annのみ: 2437 object_ann / 1121 instance /
       837 traffic_light、旧ambiguous 6 instanceを101行だけsplit) と
       `02_re_plus_autolabel`(RE review templateをaccepted昇格してA'へ適用: 2906 object_ann /
       1346 instance / 839 traffic_light) を生成。両方ともschema key一致、instance/map参照欠落0、

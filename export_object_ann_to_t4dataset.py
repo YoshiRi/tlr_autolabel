@@ -8,7 +8,7 @@ the deprecated repo-local `traffic_light_map_association.json`.
 Output:
 
   B:  object_ann/category/attribute/instance
-  B': B + traffic_light.json when map relations exist
+  B': B + traffic_light_instance_map.json when map relations exist
 
 The source dataset is not edited. Large source folders and non-generated
 annotation tables are symlinked into the derived dataset.
@@ -27,7 +27,7 @@ GENERATED = {
     "category.json",
     "attribute.json",
     "instance.json",
-    "traffic_light.json",
+    "traffic_light_instance_map.json",
     "traffic_light_map_association.json",
 }
 
@@ -327,7 +327,7 @@ def main() -> None:
     ]
     if missing_relation_instances:
         raise SystemExit(
-            "traffic_light.json would reference missing instance_token values: "
+            "traffic_light_instance_map.json would reference missing instance_token values: "
             + ", ".join(missing_relation_instances[:5])
         )
     ambiguous = {
@@ -344,9 +344,9 @@ def main() -> None:
     write_json(ann_out / "attribute.json", attribute)
     write_json(ann_out / "instance.json", instances)
     if traffic_light:
-        write_json(ann_out / "traffic_light.json", traffic_light)
+        write_json(ann_out / "traffic_light_instance_map.json", traffic_light)
     else:
-        path = ann_out / "traffic_light.json"
+        path = ann_out / "traffic_light_instance_map.json"
         if path.exists() or path.is_symlink():
             path.unlink()
     deprecated = ann_out / "traffic_light_map_association.json"
@@ -357,7 +357,7 @@ def main() -> None:
     print(
         f"object_ann: {len(normalized_object_ann)} | instances: {len(instances)} "
         f"| traffic_light relations: {len(traffic_light)} "
-        f"({'wrote traffic_light.json' if traffic_light else 'traffic_light.json absent -> Tier B'})"
+        f"({'wrote traffic_light_instance_map.json' if traffic_light else 'traffic_light_instance_map.json absent -> Tier B'})"
     )
     print(
         f"deprecated map associations consumed: {len(association_by_object_ann)} "

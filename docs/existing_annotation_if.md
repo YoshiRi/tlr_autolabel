@@ -1,7 +1,7 @@
 # Existing Annotation IF Notes
 
 Recorded: 2026-07-21
-Updated: 2026-07-27
+Updated: 2026-07-28
 
 対象:
 
@@ -36,6 +36,12 @@ Training Annotation の目標 IF は:
 
 - **B**: `annotation/object_ann.json` + `annotation/category.json` + `annotation/attribute.json` + optional `annotation/instance.json`
 - **B'**: B + `annotation/traffic_light.json`
+
+Everything else in this repo (`traffic_signal_2d/v2`, `traffic_signal_re/v1`,
+`traffic_signal_re_review/v1`, and deprecated
+`traffic_light_map_association.json`) is an A/A' or review-side artifact. Those
+files are not standard t4dataset B/B' and must not be used for tier
+classification.
 
 `traffic_light.json` is intentionally outside `object_ann.json` / `instance.json`
 and is a t4dataset annotation type defined in t4devkit:

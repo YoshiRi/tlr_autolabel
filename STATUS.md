@@ -55,7 +55,7 @@
 | L3 融合+自動補正(フリップ修復/方向スナップ/未マッチ分類) | G2 | works-here | ○ |
 | L3 タイムライン可視化(レビュー優先度付き) | G2 | works-here | ○ build/tl_match/re_timeline.html |
 | L4 CVAT 往復(人手レビュー→GT化) | G1/G2 | works-here | ○ ロスレス 299/299。bbox/visibility/reject/map id修正の主経路 |
-| L4.5 RE timeline review(状態区間→Tier B伝播) | G1/G2 | works-here | ○ 代表crop候補付きHTML。c1af6a38 smoke: 24 RE→8 group、62 segment、2376 annotation更新、再aggregate成功。実GTレビューは未 |
+| L4.5 RE timeline review(状態区間→A' sidecar伝播) | G1/G2 | works-here | ○ 代表crop候補付きHTML。c1af6a38 smoke: 24 RE→8 group、62 segment、2376 annotation更新、再aggregate成功。実GTレビューは未 |
 | L2 COCO / CVAT 出力 | G4 | works-here | ○ |
 | L2 AWML 派生データセット | G4 | experimental | △ 互換手段。実 create_data で未検証(PLAN 3, 優先度低) |
 | L4 deepen 変換 | G4 | experimental | △ 契約表のみ・変換は他リポジトリ・未検証 |

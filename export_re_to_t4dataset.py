@@ -9,7 +9,7 @@ This is an adapter/orchestration layer, not a new canonical IF. It takes:
 and writes a derived t4dataset using to_object_ann.py:
 
   B:  object_ann/category/attribute/instance
-  B': B + traffic_light.json when map relations exist
+  B': B + traffic_light_instance_map.json when map relations exist
 
 Intermediate traffic_signal_2d/v2 is temporary and deleted by default.
 """

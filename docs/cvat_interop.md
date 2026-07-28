@@ -16,7 +16,7 @@
 `detector_signal` を読む。A' はCVATレビュー用の内部形式であり、t4dataset納品時の
 map identity は t4devkit 定義の `annotation/traffic_light.json`
 (`instance_token -> traffic_light_linestring_id`) に書く。RE / group relation は
-mapから解決する。
+mapから解決する。`traffic_signal_2d_ann.json` 自体は標準t4dataset B/B'ではない。
 
 ```jsonc
 {
@@ -94,7 +94,7 @@ mapから解決する。
 # 1カメラだけ / 怪しいフレームだけ:
 ./make_cvat_review.sh <dataset_root> CAM_FRONT
 MIN_PRIORITY=1.5 ./make_cvat_review.sh <dataset_root> CAM_FRONT
-# Tier Bから作り直す(検出は再利用、地図付与だけやり直す):
+# A' sidecarを作り直す(検出は再利用、地図付与だけやり直す):
 REFRESH=1 ./make_cvat_review.sh <dataset_root>
 ```
 zipは `<dataset>/build/cvat_signal/` に出る。同フォルダに `cvat_labels.json` も出力される
@@ -107,7 +107,7 @@ source_type が全部**ドロップダウン**になる(手入力不要)。
 ## ワークフロー(レビューラウンド)
 
 ```bash
-# 1. Tier B生成(match_traffic_lights.py が v2 属性で出力)
+# 1. A' sidecar生成(match_traffic_lights.py が v2 属性で出力)
 python3 match_traffic_lights.py --dataset-root <dataset>
 #    (RE検証レポートも: aggregate_regulatory_signals.py --dataset-root <dataset>)
 # 2. CVATタスクzip生成。--min-priority で「怪しいフレームだけ」の集中タスクに
@@ -124,7 +124,7 @@ python3 import_cvat_signal_annotations.py exported.xml --dataset-root <dataset> 
 autolabel予測として突き合わせる。
 
 状態レビューをRE timeline側で行う場合は、CVAT XMLをimportして bbox/visibility
-修正をTier Bへ戻した後に:
+修正をA' sidecarへ戻した後に:
 
 ```bash
 python3 aggregate_regulatory_signals.py --dataset-root <dataset>

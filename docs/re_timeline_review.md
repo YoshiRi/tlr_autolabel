@@ -137,7 +137,7 @@ Observed:
 
 - 24 regulatory-element series folded into 8 physical signal groups.
 - 62 review segments were emitted.
-- 2376 / 2793 Tier B annotations received `review_status=accepted`.
+- 2376 / 2793 A' sidecar annotations received `review_status=accepted`.
 - 417 annotations remained `unchecked` because they did not fall under a
   reviewed RE group interval.
 - Re-aggregation of the reviewed sidecar completed successfully.

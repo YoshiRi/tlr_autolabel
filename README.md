@@ -26,9 +26,10 @@ converter, and the review UI.
 
 The prime (`'`) mark means only one thing: **whether the map / regulatory-element
 identity is carried**. The box+state+occlusion/truncation(+2D instance) core IF
-is common across A↔B; the prime adds traffic-light map identity in
-`traffic_light.json` (A'/B'). `instance.json` remains a 2D image-instance table
-and never stores lanelet2 traffic-light IDs.
+is common across A↔B. In delivered B', the prime adds traffic-light map identity
+only in `traffic_light.json`; A' carries repo-local cache fields that are used to
+populate it. `instance.json` remains a 2D image-instance table and never stores
+lanelet2 traffic-light IDs.
 
 | layer | role | input -> output | where |
 |-------|------|-----------------|-------|
@@ -53,6 +54,11 @@ Design rules:
   and group relationships are resolved from the map.
 - **L3 adds fields, does not transform**, and is now an internal aid (feeds B',
   review, and `traffic_light.json` population) rather than a delivered tier.
+- **Repo-local sidecars are not Tier B/B'.** `traffic_signal_2d/v2`,
+  `traffic_signal_re/v1`, `traffic_signal_re_review/v1`, and deprecated
+  `traffic_light_map_association.json` live on the A/A' or review side of this
+  repo only. They do not change tier classification and must be converted to
+  standard B/B' before delivery or downstream t4dataset use.
 - **L5 is out of the dependency graph.** Nothing in L1-L4 imports `ros2_pipeline/`.
 - **L6 is pure analysis** — never writes annotations, never re-runs inference.
 
@@ -85,6 +91,11 @@ emitted temporarily only with explicit compatibility flags.
 Tier classification rule: a dataset is B' iff `annotation/traffic_light.json`
 exists. A dataset without that file is Tier B, regardless of any temporary or
 deprecated repo-local JSON files.
+
+Delivered B/B' annotation files are limited to the standard t4dataset tables:
+`object_ann.json`, `category.json`, `attribute.json`, `instance.json`, and,
+for B' only, `traffic_light.json`. Files named `traffic_signal_*` and
+`traffic_light_map_association.json` are repo-local A/A'/review artifacts.
 
 > **Lossy projection is deliberate.** Tier A keeps full lamp detail; the A→B
 > `category` is the db_tlr projection (per `configs/state_vocab/db_tlr.yaml`) and
