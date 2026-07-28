@@ -155,10 +155,12 @@ VOCAB_PATH = os.path.join(HERE, "configs", "state_vocab", "db_tlr.yaml")
 OCCLUSION = {"full": "none", "partial": "partial", "occluded": "most", "unknown": "none"}
 TRUNCATION_DEFAULT = "Truncation_State.non-truncated"
 TRUNCATION_EDGE = "Truncation_State.truncated"
-# A signal facing away (back of the housing) shows no readable lamp. There is no
-# native t4 facing axis, so per the agreed contract it maps to occlusion_state.most
-# ("state not determinable"); it also reads as light_status.off (no lit lamp).
-FACING_AWAY_OCCLUSION = "occlusion_state.most"
+# Facing (from L3, incidence of the signal face vs the sight line) has no native
+# t4 axis, so per the agreed contract it maps onto occlusion_state:
+#   back          -> most    (housing back, no readable lamp; also light_status.off)
+#   front_oblique -> partial (steeply angled front face, hard to read; lamp still lit)
+# front / unknown -> from visibility.
+FACING_OCCLUSION = {"back": "occlusion_state.most", "front_oblique": "occlusion_state.partial"}
 TRUNCATION_EPS = 2.0  # px: box within this of an image border counts as truncated
 ATTRIBUTES = ["occlusion_state.none", "occlusion_state.partial", "occlusion_state.most",
               "Truncation_State.non-truncated", "Truncation_State.truncated",
@@ -352,9 +354,9 @@ def main():
         x0, y0, x1, y1 = r["box"]
         oa_token = token_of("object_ann", r["sd"], r["uid"], x0, y0, x1, y1)
         w, h = sd_wh.get(r["sd"], (2880, 1860))
-        # occlusion: facing-away overrides to "most" (no readable lamp); else from visibility
-        occ = (FACING_AWAY_OCCLUSION if r.get("facing") == "back"
-               else "occlusion_state." + OCCLUSION.get(r["vis"] or "unknown", "none"))
+        # occlusion: facing (back/oblique) overrides; else from visibility
+        occ = (FACING_OCCLUSION.get(r.get("facing"))
+               or "occlusion_state." + OCCLUSION.get(r["vis"] or "unknown", "none"))
         trunc = truncation_attr(r["box"], w, h)
         light = "light_status.on" if (r["lit"] and r.get("facing") != "back") else "light_status.off"
         attrs = [attr_token[occ], attr_token[trunc], attr_token[light]]

@@ -147,15 +147,19 @@ def load_t4_index(root: Path):
 
 
 def project_traffic_lights(frame, traffic_lights, max_distance, image_wh, margin=100.0,
-                           max_incidence_deg=75.0):
+                           max_incidence_deg=75.0, readable_incidence_deg=60.0):
     """Project all map traffic lights into this frame -> list of candidates.
 
-    Facing classification per candidate (angle between the signed face normal
-    and the sight line): "front" (<= max_incidence_deg -- lamps readable),
-    "back" (>= 180 - max_incidence_deg -- the housing's back, detector may
-    still fire an `unknown` box on it). Near-edge-on candidates in between are
-    dropped: empirical matched-rate collapses there (12% at 70-80, 6% at
-    80-90 unsigned incidence).
+    Facing classification per candidate (incidence = angle between the signed
+    face normal and the sight line, horizontal plane):
+      "front"        <= readable_incidence_deg -- lamps read cleanly
+      "front_oblique" readable_incidence_deg .. max_incidence_deg -- still the
+                     front face but steeply angled, hard to read (empirical
+                     matched-rate collapses here: 12% at 70-80, 6% at 80-90).
+                     Kept but flagged so L2 can mark it occlusion_state.partial.
+      (edge-on)      max_incidence_deg .. 180-max_incidence_deg -- lamps
+                     unreadable and box degenerate; candidate dropped.
+      "back"         >= 180 - max_incidence_deg -- the housing's back.
     """
     ego = frame["ego_pose"]
     calib = frame["calib"]
@@ -166,6 +170,7 @@ def project_traffic_lights(frame, traffic_lights, max_distance, image_wh, margin
     width, height = image_wh
     ego_xy = np.array(ego["translation"][:2])
     cos_max = np.cos(np.radians(max_incidence_deg))
+    cos_readable = np.cos(np.radians(readable_incidence_deg))
 
     candidates = []
     for way_id, tl in traffic_lights.items():
@@ -179,8 +184,10 @@ def project_traffic_lights(frame, traffic_lights, max_distance, image_wh, margin
             sight = (ego_xy - center[:2]) / distance
             cos_face = float(np.dot(tl["facing_axis"], sight))
             facing_deg = float(np.degrees(np.arccos(np.clip(cos_face, -1.0, 1.0))))
-            if cos_face >= cos_max:
+            if cos_face >= cos_readable:
                 facing = "front"
+            elif cos_face >= cos_max:
+                facing = "front_oblique"  # front face but steeply angled, hard to read
             elif cos_face <= -cos_max:
                 facing = "back"
             else:
@@ -500,6 +507,11 @@ def parse_args():
                              "side-on but still-visible signals; only near-90 (a signal "
                              "truly seen edge-on) is dropped. The eval layer can filter "
                              "high-incidence candidates separately via facing_deg.")
+    parser.add_argument("--readable-incidence-deg", default=60.0, type=float,
+                        help="Incidence up to which a front-facing signal reads cleanly "
+                             "(facing='front'). Between this and --max-incidence-deg the "
+                             "signal is steeply angled (facing='front_oblique') and L2 marks "
+                             "it occlusion_state.partial. 60 ~ the readable/unreadable border.")
     parser.add_argument("--gate-factor", default=1.5, type=float)
     parser.add_argument("--match-mode", choices=["legacy", "staged"], default="legacy",
                         help="legacy: original single Hungarian cost; staged: strict IoU pass "
@@ -671,7 +683,8 @@ def main():
         image_wh = (payload.get("width", 2880), payload.get("height", 1860))
 
         candidates = project_traffic_lights(frame, traffic_lights, args.max_distance, image_wh,
-                                            max_incidence_deg=args.max_incidence_deg)
+                                            max_incidence_deg=args.max_incidence_deg,
+                                            readable_incidence_deg=args.readable_incidence_deg)
         matches, match_stages = match_boxes(
             detections,
             candidates,
