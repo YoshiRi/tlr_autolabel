@@ -1,0 +1,8 @@
+# Autoware model-store TLR stack under /opt/autoware/mlmodels.
+# Uses the production-style 960x960 car/ped traffic-light YOLOX detector plus
+# the YOLOX-based LampRecognizer classifier that emits per-lamp color/shape/arrow.
+detector: ${AUTOWARE_MLMODELS}/traffic_light_detector/yolox_s_car_ped_tl_detector_960_960_batch_1.onnx
+classifier: ${AUTOWARE_MLMODELS}/traffic_light_classifier/traffic_light_lamp_recognizer_comlops.onnx
+classifier_param: ${AUTOWARE_MLMODELS}/traffic_light_classifier/lamp_recognizer_ml.param.yaml
+det_score_thr: 0.35
+tiles: false

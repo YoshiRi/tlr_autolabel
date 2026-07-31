@@ -131,8 +131,13 @@ recorded in `meta.preset`, so a run is reproducible from one word:
 
 ```bash
 python3 tlr_autolabel.py <dir> --preset yolox-1920-int8 --out-dir ./labels
-# available: yolox-1920-int8 (recommended), yolox-1280-int8, yolox-960-int8, comlops-large
+# available: yolox-1920-int8 (recommended), yolox-1280-int8, yolox-960-int8,
+#            comlops-large, autoware-mlmodels-960-onnx
 ```
+
+`autoware-mlmodels-960-onnx` uses the standard Autoware model-store stack:
+the 960x960 car/ped traffic-light YOLOX detector and the YOLOX-based
+LampRecognizer classifier under `/opt/autoware/mlmodels`.
 
 A detector must be chosen explicitly (`--preset` or `--detector`); explicit CLI
 flags always override preset values (`--no-tiles` cancels a preset's
@@ -146,6 +151,9 @@ The root resolves as: `$TLR_MODEL_ROOT` if set, else the first existing of
 `data_path`). `--detector` given directly also expands `~` / `$VARS` /
 `${TLR_MODEL_ROOT}`. The resolved root is recorded in `meta.model_root`, and a
 missing model fails fast printing the root and how to set it.
+The Autoware model-store preset uses `${AUTOWARE_MLMODELS}`, which resolves to
+`$AUTOWARE_MLMODELS` when set and otherwise `/opt/autoware/mlmodels`; this keeps
+the older `${TLR_MODEL_ROOT}` search order unchanged.
 
 Environment setup:
 
@@ -413,6 +421,11 @@ decomposed fields as the source and the strings as convenience. `signals` may
 be empty (frame with no detection). `signal_id` is stable across re-runs of the
 same inputs, not across frames (no tracking yet). Any schema change bumps
 `schema_version`.
+
+The Autoware model-store LampRecognizer is YOLOX-based internally, but Tier A
+uses it as a classifier. Its internal lamp detections are decoded only into
+`lamps[].label/color/shape/arrow/confidence` and the rolled-up `state`;
+`signals[].box_xyxy` remains the upstream detector ROI.
 
 ### Signal state spec
 

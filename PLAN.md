@@ -225,6 +225,39 @@ annotationの存在で自動有効化。
       ①mask: 参照は全レコード同一の空placeholder`UFhfUzU='`でt4devkitはbbox描画、我々の実RLEはデコード不能で非表示
       →placeholder mask既定化(`--real-masks`で実マスク選択可)。②属性名`truncation_state`→`Truncation_State`(参照に厳密一致)。
       再実行semantics修正: object_annは2D TLRとして毎回置換、instanceはsample_annotation参照の3Dのみ保持(dedup罠回避)
+### 2.15 `/opt/autoware/mlmodels` TLR classifier 統合(2026-07-31開始)
+目的: Autoware model-store の `traffic_light_classifier` にある YOLOX-based
+LampRecognizer(`traffic_light_lamp_recognizer_comlops.*`)を、このRepoのL1
+autolabelingで再現可能に選べるようにする。出力IFは既存
+`tlr_autolabel/v1` の `lamps[]` / `state` を維持し、L3以降へ影響を出さない。
+
+方針:
+- 先行: ONNX版は現行decode(`lamp_recognizer_ml.param.yaml`)と互換なので、
+  `configs/detectors` のプリセットから detector + classifier + classifier_param を
+  一括指定できるようにする。
+- 次点: classifier `.engine` は `TrtServer` 経由で実装する。dynamic batch engineは
+  TensorRT profile shapeを解決してからbuffer確保し、GPU環境でone-shot smokeする。
+- MobileNet full-signal classifier は今回対象外。灯火単位の `color/shape/arrow` を
+  `lamps[]` に保持できる LampRecognizer を正とする。
+- LampRecognizerはYOLOX-basedだが、このRepoのIF上は分類器として扱う。内部のlamp
+  box geometryはTier Aへ出さず、`signals[].box_xyxy`はupstream detector ROIのまま、
+  出力は既存の `lamps[].label/color/shape/arrow/confidence` と `state` に畳み込む。
+
+初期スコープ:
+- [x] `/opt/autoware/mlmodels` 標準構成向けプリセット `autoware-mlmodels-960-onnx` 追加。
+      既存 `${TLR_MODEL_ROOT}` の探索順を変えず、専用 `${AUTOWARE_MLMODELS}` を
+      `/opt/autoware/mlmodels` へ解決する。
+- [x] `--classifier *.engine` を受ける `LampClassifier` backend 分岐を追加。
+      batch>1 engineは先頭batchへcropを入れて残りをzero paddingする。
+      `trt_run.cpp` は dynamic batch engine の profile shape を解決してからbuffer確保するよう修正。
+- [x] ONNX smoke: `/opt` detector + `/opt` LampRecognizer で `tlr_autolabel/v1` が出ることを確認。
+      `CAM_TRAFFIC_LIGHT_FAR/00000.jpg` で `red-circle` 1件、`classifier_backend=['CPUExecutionProvider']`。
+- [x] GPU環境で classifier engine smoke。sandbox外実行で
+      `traffic_light_lamp_recognizer_comlops.engine` が起動し、`CAM_TRAFFIC_LIGHT_FAR/00028.jpg`
+      で `red-circle` 2件、`classifier_backend=tensorrt-engine` を確認。
+- [x] YOLOX classifier output -> Tier A classification接続: classifier内部のlamp検知は
+      `lamps[]` / `state` へ変換し、Tier A geometryへは接続しない。
+
 ### 3. [hold] AWML 結合テスト(ユーザー指示により保留中)
 - [ ] AWML checkout 上で `create_data_t4dataset.py` を派生データセットに対して実行
 - [ ] `mask: null` / `instance_token: null` の t4dev-kit 受容確認

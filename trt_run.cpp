@@ -33,6 +33,19 @@ static size_t volume(const Dims& d) {
   return v;
 }
 
+static bool has_dynamic_dim(const Dims& d) {
+  for (int i = 0; i < d.nbDims; ++i) {
+    if (d.d[i] < 0) return true;
+  }
+  return false;
+}
+
+static std::string dims_string(const Dims& d) {
+  std::ostringstream dims;
+  for (int k = 0; k < d.nbDims; ++k) dims << d.d[k] << (k + 1 < d.nbDims ? " " : "");
+  return dims.str();
+}
+
 int main(int argc, char** argv) {
   if (argc < 3) { fprintf(stderr, "usage: %s engine (in.f32 out.f32 | serve)\n", argv[0]); return 1; }
   std::ifstream f(argv[1], std::ios::binary);
@@ -45,17 +58,38 @@ int main(int argc, char** argv) {
   auto* ctx = engine->createExecutionContext();
 
   int nio = engine->getNbIOTensors();
+  std::vector<std::string> names(nio);
+  std::vector<bool> is_input(nio);
+  for (int i = 0; i < nio; ++i) {
+    const char* name = engine->getIOTensorName(i);
+    names[i] = name;
+    is_input[i] = engine->getTensorIOMode(name) == TensorIOMode::kINPUT;
+    if (is_input[i]) {
+      Dims d = engine->getTensorShape(name);
+      if (has_dynamic_dim(d)) {
+        Dims opt = engine->getProfileShape(name, 0, OptProfileSelector::kOPT);
+        if (has_dynamic_dim(opt) || !ctx->setInputShape(name, opt)) {
+          fprintf(stderr, "cannot resolve dynamic input shape for %s\n", name);
+          return 1;
+        }
+      }
+    }
+  }
+
   std::vector<void*> devbuf(nio);
   int in_idx = -1, out_idx = -1;
   size_t in_count = 0, out_count = 0;
   for (int i = 0; i < nio; ++i) {
-    const char* name = engine->getIOTensorName(i);
-    Dims d = engine->getTensorShape(name);
+    const char* name = names[i].c_str();
+    Dims d = ctx->getTensorShape(name);
+    if (d.nbDims < 0 || has_dynamic_dim(d)) d = engine->getTensorShape(name);
+    if (d.nbDims < 0 || has_dynamic_dim(d)) {
+      fprintf(stderr, "unresolved tensor shape for %s: %s\n", name, dims_string(d).c_str());
+      return 1;
+    }
     size_t count = volume(d);
-    bool is_in = engine->getTensorIOMode(name) == TensorIOMode::kINPUT;
-    std::ostringstream dims;
-    for (int k = 0; k < d.nbDims; ++k) dims << d.d[k] << (k + 1 < d.nbDims ? " " : "");
-    printf("%s %s\n", is_in ? "INPUT" : "OUTPUT", dims.str().c_str());
+    bool is_in = is_input[i];
+    printf("%s %s\n", is_in ? "INPUT" : "OUTPUT", dims_string(d).c_str());
     cudaMalloc(&devbuf[i], count * sizeof(float));
     ctx->setTensorAddress(name, devbuf[i]);
     if (is_in) { in_idx = i; in_count = count; }

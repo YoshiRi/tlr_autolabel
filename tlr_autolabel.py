@@ -172,7 +172,7 @@ def comlops_decode(outs, mp, score_thr, keep_class_ids):
 class TrtServer:
     """Runs a TensorRT .engine through the trt_run helper (serve mode keeps the
     engine deserialized across images). Single input / single output engines
-    only, i.e. the YOLOX detectors. Compiled from trt_run.cpp on first use."""
+    only. Compiled from trt_run.cpp on first use."""
 
     def __init__(self, engine_path):
         import subprocess
@@ -361,47 +361,124 @@ def detect_full_and_tiles(detector, img, args):
     return det_nms(dets, args.det_nms_thr)
 
 
-def process_image(img, detector,
-                  cls_sess, cls_in, cls_out, cls_mp, cls_w, cls_h, args):
+def clipped_detection_box(b, iw, ih, min_box):
+    X0 = int(max(0, min(iw - 1, b["x1"])))
+    Y0 = int(max(0, min(ih - 1, b["y1"])))
+    X1 = int(max(0, min(iw, b["x2"])))
+    Y1 = int(max(0, min(ih, b["y2"])))
+    if min(X1 - X0, Y1 - Y0) < min_box:
+        return None
+    return X0, Y0, X1, Y1
+
+
+def decode_lamps(cout, cls_mp, cls_w, cls_h, args):
+    lamps = []
+    cdets = cls_nms(
+        classify_decode(cout, cls_mp, cls_w, cls_h, args.cls_score_thr),
+        args.cls_nms_thr)
+    for d in sorted(cdets, key=lambda d: -d["prob"]):
+        lamps.append({
+            "label": lamp_label(d),
+            "color": COLORS.get(d["color"]),
+            "shape": SHAPES.get(d["shape"]),
+            "arrow": arrow_of(d),
+            "confidence": round(d["prob"], 4),
+        })
+    return lamps
+
+
+def normalize_lamps(lamps):
+    """Keep Tier A classification output independent from classifier internals."""
+    allowed = ("label", "color", "shape", "arrow", "confidence")
+    return [{k: lamp.get(k) for k in allowed} for lamp in lamps]
+
+
+def classify_box(img, box_xyxy, run_classifier, cls_mp, cls_w, cls_h, args):
+    ih, iw = img.shape[:2]
+    X0, Y0, X1, Y1 = box_xyxy
+    pad = args.crop_pad
+    px = int((X1 - X0) * pad)
+    py = int((Y1 - Y0) * pad)
+    cx0, cy0 = max(0, X0 - px), max(0, Y0 - py)
+    cx1, cy1 = min(iw, X1 + px), min(ih, Y1 + py)
+    crop = img[cy0:cy1, cx0:cx1]
+    lamps = []
+    if crop.size > 0:
+        cblob = cls_preprocess(crop, cls_w, cls_h)
+        lamps = decode_lamps(run_classifier(cblob), cls_mp, cls_w, cls_h, args)
+    return lamps
+
+
+class LampClassifier:
+    """Lamp classifier adapter: classify(image, bbox) -> list of lamp dicts."""
+
+    def __init__(self, model_path, param_path, args):
+        self.model_path = model_path
+        self.model_params = load_model_params(param_path)
+        self.args = args
+        self.trt = None
+        self.sess = None
+
+        if model_path.endswith(".engine"):
+            self.trt = TrtServer(model_path)
+            if len(self.trt.in_shape) != 4 or len(self.trt.out_shape) != 4:
+                raise SystemExit(
+                    f"classifier engine must be NCHW -> NCHW, got "
+                    f"{self.trt.in_shape} -> {self.trt.out_shape}")
+            self.input_shape = tuple(self.trt.in_shape)
+            self.batch = self.input_shape[0]
+            _, _, self.height, self.width = self.input_shape
+            self.backend = "tensorrt-engine"
+            return
+
+        self.sess = make_session(model_path)
+        self.input_name = self.sess.get_inputs()[0].name
+        self.output_name = self.sess.get_outputs()[0].name
+        _, _, self.height, self.width = [
+            d if isinstance(d, int) else 256 for d in self.sess.get_inputs()[0].shape
+        ]
+        self.backend = str(self.sess.get_providers())
+
+    def run(self, cblob):
+        if self.trt is None:
+            return self.sess.run([self.output_name], {self.input_name: cblob})[0][0]
+        if cblob.shape != self.input_shape:
+            if cblob.shape[1:] != self.input_shape[1:]:
+                raise RuntimeError(
+                    f"classifier blob shape {cblob.shape} does not match engine "
+                    f"input shape {self.input_shape}")
+            padded = np.zeros(self.input_shape, dtype=np.float32)
+            padded[0] = cblob[0]
+            cblob = padded
+        return self.trt.run(cblob)[0]
+
+    def classify(self, img, bbox):
+        return classify_box(
+            img,
+            bbox,
+            self.run,
+            self.model_params,
+            self.width,
+            self.height,
+            self.args,
+        )
+
+
+def process_image(img, detector, classifier, args):
     ih, iw = img.shape[:2]
     boxes = detect_full_and_tiles(detector, img, args)
 
     results = []
     for b in boxes:
-        X0 = int(max(0, min(iw - 1, b["x1"])))
-        Y0 = int(max(0, min(ih - 1, b["y1"])))
-        X1 = int(max(0, min(iw, b["x2"])))
-        Y1 = int(max(0, min(ih, b["y2"])))
-        # optional padding around the ROI before classifying
-        pad = args.crop_pad
-        px = int((X1 - X0) * pad)
-        py = int((Y1 - Y0) * pad)
-        # drop tiny detections (noise) by shorter side in original pixels
-        if min(X1 - X0, Y1 - Y0) < args.min_box:
+        box_xyxy = clipped_detection_box(b, iw, ih, args.min_box)
+        if box_xyxy is None:
             continue
-        cx0, cy0 = max(0, X0 - px), max(0, Y0 - py)
-        cx1, cy1 = min(iw, X1 + px), min(ih, Y1 + py)
-        crop = img[cy0:cy1, cx0:cx1]
-        lamps = []
-        if crop.size > 0:
-            cblob = cls_preprocess(crop, cls_w, cls_h)
-            cout = cls_sess.run([cls_out], {cls_in: cblob})[0][0]
-            cdets = cls_nms(
-                classify_decode(cout, cls_mp, cls_w, cls_h, args.cls_score_thr),
-                args.cls_nms_thr)
-            for d in sorted(cdets, key=lambda d: -d["prob"]):
-                lamps.append({
-                    "label": lamp_label(d),
-                    "color": COLORS.get(d["color"]),
-                    "shape": SHAPES.get(d["shape"]),
-                    "arrow": arrow_of(d),
-                    "confidence": round(d["prob"], 4),
-                })
+        lamps = normalize_lamps(classifier.classify(img, box_xyxy))
         if args.drop_unknown and not lamps:
             continue
         results.append({
             "detector_score": round(b["prob"], 4),
-            "box_xyxy": [X0, Y0, X1, Y1],
+            "box_xyxy": list(box_xyxy),
             "lamps": lamps,
             "state": signal_state(lamps),
         })
@@ -430,6 +507,13 @@ PRESET_DIR = os.path.join(HERE, "configs", "detectors")
 MODEL_ROOT_CANDIDATES = ["~/autoware_data", "/opt/autoware/mlmodels"]
 
 
+def autoware_mlmodels_root():
+    """Resolve the standard Autoware model-store mount without changing the
+    older TLR_MODEL_ROOT search order used by existing presets."""
+    env = os.environ.get("AUTOWARE_MLMODELS") or os.environ.get("AUTOWARE_MLMODELS_ROOT")
+    return os.path.expanduser(env) if env else "/opt/autoware/mlmodels"
+
+
 def model_root():
     """Resolve the model root: $TLR_MODEL_ROOT if set, else the first existing
     candidate. Presets reference models as ${TLR_MODEL_ROOT}/..., so this keeps
@@ -445,11 +529,13 @@ def model_root():
 
 
 def expand_path(val):
-    """Expand ~, $VARS, and ${TLR_MODEL_ROOT} (even when the env var is unset,
-    using the resolved model root) in a preset/CLI path string."""
+    """Expand ~, $VARS, ${TLR_MODEL_ROOT}, and ${AUTOWARE_MLMODELS} in a
+    preset/CLI path string."""
     return os.path.expanduser(os.path.expandvars(
         val.replace("${TLR_MODEL_ROOT}", model_root())
-           .replace("$TLR_MODEL_ROOT", model_root())))
+           .replace("$TLR_MODEL_ROOT", model_root())
+           .replace("${AUTOWARE_MLMODELS}", autoware_mlmodels_root())
+           .replace("$AUTOWARE_MLMODELS", autoware_mlmodels_root())))
 
 
 def list_presets():
@@ -538,30 +624,40 @@ def main():
     if not args.detector:
         raise SystemExit("choose a detector: --preset <name> "
                          f"(available: {', '.join(list_presets())}) or --detector <model path>")
-    # a --detector given directly may also use ~ / $VARS / ${TLR_MODEL_ROOT}
+    # model paths given directly may also use ~ / $VARS / ${TLR_MODEL_ROOT}
     args.detector = expand_path(args.detector)
+    args.classifier = expand_path(args.classifier)
+    args.classifier_param = expand_path(args.classifier_param)
+    args.comlops_param = expand_path(args.comlops_param)
     if not os.path.exists(args.detector):
         raise SystemExit(
             f"detector model not found: {args.detector}"
             + (f" (from preset {args.preset})" if args.preset else "")
             + f"\nmodel root = {model_root()} "
             "(set $TLR_MODEL_ROOT to point at your ML model directory).")
+    if not os.path.exists(args.classifier):
+        raise SystemExit(
+            f"classifier model not found: {args.classifier}"
+            + (f" (from preset {args.preset})" if args.preset else "")
+            + f"\nmodel root = {model_root()} "
+            "(set $TLR_MODEL_ROOT to point at your ML model directory).")
+    if not os.path.exists(args.classifier_param):
+        raise SystemExit(
+            f"classifier param not found: {args.classifier_param}"
+            + (f" (from preset {args.preset})" if args.preset else ""))
 
     detector = Detector(args.detector, args.comlops_param)
     if detector.kind == "comlops":
         detector.set_keep_classes([s.strip() for s in args.det_classes.split(",") if s.strip()])
 
-    cls_sess = make_session(args.classifier)
-    cls_in = cls_sess.get_inputs()[0].name
-    cls_out = cls_sess.get_outputs()[0].name
-    _, _, cls_h, cls_w = [d if isinstance(d, int) else 256 for d in cls_sess.get_inputs()[0].shape]
-    cls_mp = load_model_params(args.classifier_param)
+    classifier = LampClassifier(args.classifier, args.classifier_param, args)
 
     backend = ("tensorrt-engine" if detector.sess is None
                else str(detector.sess.get_providers()))
     print(f"detector={os.path.basename(args.detector)} [{detector.kind}] "
           f"in={detector.w}x{detector.h} backend={backend}")
-    print(f"classifier={os.path.basename(args.classifier)} in={cls_w}x{cls_h}")
+    print(f"classifier={os.path.basename(args.classifier)} "
+          f"in={classifier.width}x{classifier.height} backend={classifier.backend}")
 
     if os.path.isdir(args.image):
         paths = sorted(sum([glob.glob(os.path.join(args.image, e))
@@ -598,6 +694,7 @@ def main():
         "detector_backend": backend,
         "model_root": model_root(),
         "classifier": os.path.basename(args.classifier),
+        "classifier_backend": classifier.backend,
         "tiles": bool(args.tiles),
         "det_score_thr": args.det_score_thr,
         "det_nms_thr": args.det_nms_thr,
@@ -616,8 +713,7 @@ def main():
         if img is None:
             print(f"[skip] {p}")
             continue
-        results = process_image(img, detector,
-                                cls_sess, cls_in, cls_out, cls_mp, cls_w, cls_h, args)
+        results = process_image(img, detector, classifier, args)
         name = os.path.splitext(os.path.basename(p))[0]
         print(f"\n=== {os.path.basename(p)} ({img.shape[1]}x{img.shape[0]}): "
               f"{len(results)} signal(s) ===")
