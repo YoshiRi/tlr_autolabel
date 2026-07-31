@@ -11,12 +11,12 @@ consumes them -- we don't maintain those converters. B holds only:
                    (2D bbox tracking, greedy IoU per camera) + mask
                    (box-rectangle RLE; --no-masks for null)
   instance.json    the tracked 2D instances (token, category, name, counts)
-  traffic_light_instance_map.json  2D instance -> lanelet2 traffic-light linestring relation
+  traffic_light.json  2D instance -> lanelet2 traffic-light linestring relation
   category.json    source categories + the db_tlr state categories used
   attribute.json   occlusion_state.{none,partial,most} + truncation_state.{...}
 
 Map linkage is a SEPARATE relation, distinct from the 2D instance name. The B'
-target is t4devkit-defined `traffic_light_instance_map.json`:
+target is t4devkit-defined `traffic_light.json`:
 
   {"token": ..., "instance_token": ..., "traffic_light_linestring_id": ...}
 
@@ -113,7 +113,7 @@ def assign_instances(records, sd_meta):
         items.sort()
         # (instance_token, last_box, first_ann_uid, category, last_ts, map_id)
         # The instance remains a 2D image identity, but a single instance cannot
-        # point to multiple map linestrings in traffic_light_instance_map.json. Preventing
+        # point to multiple map linestrings in traffic_light.json. Preventing
         # incompatible map merges here keeps the relation table unambiguous.
         active = []
         last_ts = None
@@ -257,7 +257,7 @@ def main():
     ap.add_argument("--write-deprecated-map-association", action="store_true",
                     help="temporary compatibility only: also write deprecated "
                          "traffic_light_map_association.json. New consumers must use "
-                         "traffic_light_instance_map.json.")
+                         "traffic_light.json.")
     args = ap.parse_args()
     if bool(args.autolabel_dir) == bool(args.sidecar):
         raise SystemExit("give exactly one of --autolabel-dir / --sidecar")
@@ -271,7 +271,7 @@ def main():
     # These tables we (re)generate. Everything else — crucially
     # sample_annotation.json (3D boxes) and its ego_pose etc. — is untouched.
     generated = {"object_ann.json", "category.json", "attribute.json",
-                 "instance.json", "traffic_light_instance_map.json",
+                 "instance.json", "traffic_light.json", "traffic_light_instance_map.json",
                  "traffic_light_map_association.json"}
 
     if args.in_place:
@@ -419,11 +419,14 @@ def main():
     json.dump(categories, open(os.path.join(ann_out, "category.json"), "w"), indent=2)
     json.dump(attributes, open(os.path.join(ann_out, "attribute.json"), "w"), indent=2)
     json.dump(final_instances, open(os.path.join(ann_out, "instance.json"), "w"), indent=2)
-    traffic_light_path = os.path.join(ann_out, "traffic_light_instance_map.json")
+    traffic_light_path = os.path.join(ann_out, "traffic_light.json")
     if traffic_light:
         json.dump(traffic_light, open(traffic_light_path, "w"), indent=2)
     elif os.path.exists(traffic_light_path):
         os.remove(traffic_light_path)
+    stale_instance_map_path = os.path.join(ann_out, "traffic_light_instance_map.json")
+    if os.path.exists(stale_instance_map_path):
+        os.remove(stale_instance_map_path)
     legacy_assoc_path = os.path.join(ann_out, "traffic_light_map_association.json")
     if args.write_deprecated_map_association:
         json.dump(assoc, open(legacy_assoc_path, "w"), indent=2)
@@ -435,7 +438,7 @@ def main():
           f"= {len(final_object_ann)} | instances: {len(kept_instances)} 3D + "
           f"{len(instances)} TLR 2D = {len(final_instances)} | masks: {args.mask}")
     print(f"traffic_light relations: {len(traffic_light)} "
-          f"({'wrote traffic_light_instance_map.json' if traffic_light else 'traffic_light_instance_map.json absent -> Tier B'})")
+          f"({'wrote traffic_light.json' if traffic_light else 'traffic_light.json absent -> Tier B'})")
     if args.write_deprecated_map_association:
         print(f"deprecated legacy map associations: {len(assoc)}")
     for name, n in sorted(counts.items(), key=lambda t: -t[1]):

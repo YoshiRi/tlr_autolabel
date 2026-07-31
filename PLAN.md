@@ -26,6 +26,7 @@
 | 07-21 | **L4.5 RE timeline review基盤**: CVATのbbox/visibility修正と分離し、信号状態を物理信号グループ(`member_ways`)×時系列区間でレビューする `traffic_signal_re_review/v1` を追加。`render_re_review_timeline.py`(静的HTML編集UI)、`make_re_review_template.py`(ひな形生成)、`apply_re_review.py`(A' sidecarへ伝播) + `docs/re_timeline_review.md`。c1af6a38既存autolabelで smoke: 24 RE→8 group、62 segment、2376/2793 annotationへaccepted伝播、再aggregate成功 |
 | 07-27 | **B/B' IF再整理**: B' の差分を t4devkit 定義 `annotation/traffic_light.json` の有無に固定。schema は `{token, instance_token, traffic_light_linestring_id}`。RE/group は map から解決。`traffic_light_map_association.json` は temporary/deprecated と明記し、新規consumer禁止 |
 | 07-28 | **B/B' IF文書の再明確化**: B/B'の正しいt4dataset IFは `object_ann.json` 系 + `traffic_light.json` のみと再確認。`traffic_signal_2d/v2` / `traffic_signal_re/v1` / `traffic_signal_re_review/v1` / `traffic_light_map_association.json` はこのRepo内のA/A'側またはtemporary/deprecated sidecarであり、B/B'判定・納品IFには含めない。 |
+| 07-31 | **TIER B IF再確認**: `annotation/traffic_light.json` は `{token, instance_token, traffic_light_linestring_id}`。B/B'差分はこのファイルの有無だけで、RE/group relationはmapから解決する。 |
 
 ## 📋 残タスク(実行順)
 

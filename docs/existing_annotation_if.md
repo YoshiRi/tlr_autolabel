@@ -1,7 +1,7 @@
 # Existing Annotation IF Notes
 
 Recorded: 2026-07-21
-Updated: 2026-07-28
+Updated: 2026-07-31
 
 対象:
 
@@ -57,7 +57,7 @@ and is a t4dataset annotation type defined in t4devkit:
 `instance_token` points to the 2D `instance.json` row. The
 `traffic_light_linestring_id` points to the lanelet2 traffic-light linestring.
 Regulatory-element and group relationships are already in the map and are
-resolved from that linestring. This repository must not encode those map
+resolved from that primitive. This repository must not encode those map
 identifiers in `object_ann`, `instance_token`, or `instance_name`.
 
 ### B/B' Instance Identity
