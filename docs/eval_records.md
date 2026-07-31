@@ -43,6 +43,10 @@ Precision side, state/unknown rates, and (when reviewed) state accuracy.
 | `iou` | IoU with the projected map box, or null |
 | `distance_m` / `distance_bin` | ego→head distance and its bin |
 | `review_status` | `unchecked` / `accepted` / `fixed` / `rejected` |
+| `source_type` | A' annotation source: `auto` / `tracked` / `propagated` / `interpolated` / `map_presence` / etc. |
+| `temporal_source` | evaluation grouping for temporal output: `observed` / `propagated` / `map_presence` / null |
+| `track_id` | L3 temporal track id, or null |
+| `tracking_status` / `tracking_lost_frames` | temporal track state and lost-frame count, or null |
 | `gt_state` | reviewed canonical state (only for accepted/fixed) |
 | `state_correct` | `gt_state == state` (null until reviewed) |
 

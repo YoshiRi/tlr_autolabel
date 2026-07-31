@@ -3,7 +3,7 @@
 作業計画の単一管理ファイル。タスクの追加・完了・方針変更はここを更新する。
 設計の契約は README.md 冒頭(処理層 / Tier A-C + B-review)。矛盾時は README を正とする。
 
-最終更新: 2026-07-28
+最終更新: 2026-07-31
 
 ## ✅ 完了(日付順)
 
@@ -225,6 +225,56 @@ annotationの存在で自動有効化。
       ①mask: 参照は全レコード同一の空placeholder`UFhfUzU='`でt4devkitはbbox描画、我々の実RLEはデコード不能で非表示
       →placeholder mask既定化(`--real-masks`で実マスク選択可)。②属性名`truncation_state`→`Truncation_State`(参照に厳密一致)。
       再実行semantics修正: object_annは2D TLRとして毎回置換、instanceはsample_annotation参照の3Dのみ保持(dedup罠回避)
+
+### 2.14 L1/L3 時系列trackingで検出ロスト低減(2026-07-29開始)
+目的: 単一フレームの検出欠落やscore低下で、直前まで観測できていた信号灯が消える問題を下げる。
+DeepSORT/Re-IDは導入せず、ByteTrack風のHigh/Low 2段階associationを初期実装にする。
+
+役割分担:
+- L1(`tlr_autolabel.py`): 既存`signals`はhigh閾値の分類済み出力として互換維持。任意でlow閾値までの
+  `raw_detections`を残し、L3が既存track更新にだけ使えるようにする。
+- L3(`match_traffic_lights.py`): map projectionと`map_traffic_light_id`を使えるため、時系列association本体はここに置く。
+  既存のgap filling / map_presenceは事後補完として残し、tracking由来の実検出回収(`source_type=tracked`)と区別する。
+
+初期スコープ:
+- [x] L1: `--det-low-score-thr` / `raw_detections` / meta記録。無効時は現在の`tlr_autolabel/v1`相当。
+      low候補は既定で未分類(bbox/scoreのみ、`state=unknown`)にし、tracking/map associationで絞る前に
+      classifierへ直接結合しない構造へ寄せた。必要時のみ`--classify-low-detections`で分類する。
+- [x] L3: `--temporal-tracking`で有効化、high検出は新規track生成可、low検出は既存track更新のみ。
+- [x] L3: association優先度は map way一致 > 現在の投影bbox近傍 > 前回投影bbox/前回bboxのIoU・中心距離・サイズ比。
+      `state`は強条件に使わない。現在frameにmap projection candidateが無いtrackも、前回投影bbox/前回bbox周辺でlow再捕捉できるfallbackを追加。
+- [x] L3: lost TTL保持。短い未検出は`source_type=propagated`でmap projectionを出す(既定stateはunknown、`--tracking-propagate-state`で前回state)。
+- [x] L3: `auto` / `tracked` / `propagated` / `map_presence`を区別し、`temporal_source=observed|propagated|map_presence`で評価分離可能にする。
+      `evaluate_signals.py`の`eval_detections.jsonl`にも`source_type`/`temporal_source`/`track_id`/
+      `tracking_status`/`tracking_lost_frames`を列として保持。
+- [x] 設定: highは`--min-score`、low/TTL/IoU/中心距離gate/投影gate/サイズ比はCLIまたは`configs/tracking/bytetrack-lite.yaml`から変更可能。
+- [x] Track ID安定化: TTL超過後に同じ(channel,map way)を再観測した場合も既存track_idを再利用する。
+      map wayが同じ物理信号を指すため、短期lost/長期再登場でIDを増やさない。
+- [x] 回帰: 構文チェック、CLI help、合成association/integration/L1 low candidate/eval ledger/interface unittest(12件) pass。
+- [x] 合成T4 integration: 最小 `annotation/*` + `map/lanelet2_map.osm` + `tlr_autolabel/*.json` で
+      `match_traffic_lights.py`をsubprocess実行。tracking offは既存どおり`auto` 1件で
+      `temporal_tracking` paramsなし、tracking onは`auto`→`tracked`→`propagated`を同一
+      `track_id`/map wayで出力、low再捕捉1件・TTL伝播1件・frame/map重複なしを確認。
+- [x] 実データsmoke: `data/cb7fd5c0_re_plus_autolabel_bprime` のsymlink先を使い、
+      出力は`/tmp/tlr_tracking_smoke/`へ隔離。`--limit 200 --min-score 0.7 --no-fill-gaps --no-map-fill`で
+      tracking off/onを比較。off: 218 annotations all `auto`, `temporal_tracking` paramsなし。
+      on: 221 annotations = `auto` 218 + `tracked` 2 + `propagated` 1、low候補8/low再捕捉2/TTL伝播1、
+      duplicate `(sample_data_token,map_traffic_light_id)` 0、同一(channel,map way)で複数track_id 0。
+      low再捕捉stageは2件とも`temporal_low:current_map_projection`。
+- [x] 実データfull smoke: 同dataset全668 framesでtracking off/on比較(`--min-score 0.7 --no-fill-gaps --no-map-fill`)。
+      off: 1474 annotations all `auto`, paramsに`temporal_tracking`なし。
+      on: 1531 annotations = `auto`1474 + `tracked`3 + `propagated`54、low候補138/low再捕捉3/TTL伝播54、
+      terminated 11、duplicate `(sample_data_token,map_traffic_light_id)` 0、同一(channel,map way)で複数track_id 0。
+      `TemporalAssociator.update -> TrackingResult`化後も同じ内訳を再確認。
+- [x] L6 ledger smoke: `/tmp/tlr_tracking_smoke/full_on.json`を`evaluate_signals.py`へ通し、
+      `eval_detections.jsonl`で`source_type`内訳 `auto`1474 / `tracked`3 / `propagated`54 と
+      `temporal_source`/`track_id`/`tracking_lost_frames`列が出ることを確認。
+- [x] インターフェース整備: 添付要件の `Classifier.classify` / `MapProjector.project` /
+      `TemporalAssociator.update -> TrackingResult` に合わせ、既存関数呼び出しを薄いadapterへ寄せる。
+      ML実装詳細とtracking処理を直接結合しない設計をコード上でも明確化。
+      実装名: `LampClassifier.classify`、`MapProjector.project`、
+      `TemporalAssociator.update(...)->TrackingResult`。
+
 ### 2.15 `/opt/autoware/mlmodels` TLR classifier 統合(2026-07-31開始)
 目的: Autoware model-store の `traffic_light_classifier` にある YOLOX-based
 LampRecognizer(`traffic_light_lamp_recognizer_comlops.*`)を、このRepoのL1

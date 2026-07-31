@@ -518,6 +518,12 @@ Or stage by stage:
 #    both flat CHANNEL_frame.json dirs and per-channel subdirs are accepted.
 python3 match_traffic_lights.py --dataset-root <dataset>
 
+# Optional: recover weak real detections with temporal tracking. Run L1 with
+# --det-low-score-thr first if you need candidates below the normal L1 threshold.
+python3 match_traffic_lights.py --dataset-root <dataset> \
+    --temporal-tracking \
+    --tracking-config configs/tracking/bytetrack-lite.yaml
+
 # 2) fuse across cameras and heads with map-bulb feasibility weighting ->
 #    annotation/traffic_signal_re_timeseries.json (traffic_signal_re/v1)
 #    + build/tl_match/re_verification_report.json (flags for review)
@@ -537,6 +543,36 @@ python3 apply_re_review.py --dataset-root <dataset> \
 
 The lanelet2 `light_bulbs` color tags use `yellow`; canonical `amber` is
 translated only at the map-comparison boundary (`state_tokens.bulb_color`).
+
+Temporal tracking (initial profile: `configs/tracking/bytetrack-lite.yaml`) is
+off unless `--temporal-tracking` is passed. `--tracking-config` is only a
+parameter profile and does not enable tracking by itself. `--no-temporal-tracking`
+is available for wrappers that want an explicit off switch. The tracker is
+ByteTrack-like rather than appearance-based:
+
+- implementation boundaries are explicit: `Detector.detect(...)`,
+  `LampClassifier.classify(image, bbox)`, `MapProjector.project(frame, image_wh)`,
+  and `TemporalAssociator.update(...) -> TrackingResult`;
+- high detections (`--min-score` and above) may create or update a map-way
+  track;
+- low detections (`tracking.low_score` up to `--min-score`) may only update an
+  existing track, so lowering the threshold does not create new FP tracks;
+- association favors the map traffic-light way and current projected bbox, then
+  the previous projected bbox / previous observed bbox by IoU, center distance,
+  and size ratio. `state` is not a hard association condition because traffic
+  lights can switch;
+- unmatched tracks are kept for `max_lost_frames`; when the current map
+  projection is still in view, a short-lived `source_type=propagated` annotation
+  can be emitted;
+- `attributes.temporal_source` gives the evaluation axis:
+  `observed` (`auto`/`tracked`), `propagated`, or `map_presence`.
+
+This is separate from bounded gap filling below. Tracking recovers weak ML
+detections before review; gap filling and map-presence are post-process
+completion aids and remain distinguishable via `source_type`. The standard
+Tier B converter defaults to a conservative export and drops `tracked`,
+`propagated`, `interpolated`, and `map_presence` rows unless
+`--drop-source-types` is explicitly relaxed.
 
 Fusion repair policies (decided 2026-07-19):
 
@@ -613,7 +649,11 @@ read-fallback: `detector_signal` -> `raw_state`.
         "regulatory_element_id": "10302,10304",// comma-joined relation ids, "" if none
         "raw_state": "...",                    // detector state as emitted by L1
         "detector_score": "0.93",              // string; "" when absent
-        "source_type": "auto"                  // manual | projected_map | auto | interpolated | map_presence
+        "source_type": "auto",                 // manual | projected_map | auto | tracked | propagated | interpolated | map_presence
+        "temporal_source": "observed",         // observed | propagated | map_presence (optional on old runs)
+        "track_id": "tltrk-000001",            // optional; L3 temporal tracking
+        "tracking_status": "observed",
+        "tracking_lost_frames": "0"
       }
     }
   ]

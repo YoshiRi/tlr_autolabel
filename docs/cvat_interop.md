@@ -50,7 +50,11 @@ mapから解決する。`traffic_signal_2d_ann.json` 自体は標準t4dataset B/
 | `facing` | text | `front` `back` / 導出値(未マッチは空) | しない | 灯器面の向き(linestring方向-90°回転の法線、本地図で実証済み)。`back` は筐体裏面の検出 — colored stateなら誤対応疑い |
 | `raw_state` | text | autolabelの元state | しない | 検出器の原文。人手修正後も不変(diff用) |
 | `detector_score` | text | 検出スコア / 空(手動box) | しない | provenance |
-| `source_type` | select | `manual` `projected_map` `auto` `interpolated` `map_presence` / CVAT新規box=`manual`(先頭)、自動生成分は `auto` 値で出力 | しない | 由来の区別 |
+| `source_type` | select | `manual` `projected_map` `auto` `tracked` `propagated` `interpolated` `map_presence` / CVAT新規box=`manual`(先頭)、通常検出は `auto`、low再捕捉は `tracked` | しない | 由来の区別 |
+| `temporal_source` | select | `observed` `propagated` `map_presence` / 旧runは空 | しない | 評価用の大分類。実検出=observed、TTL伝播=propagated、地図のみ補完=map_presence |
+| `track_id` | text | L3 temporal trackingのtrack id / 空 | しない | 同一map wayの時系列track識別子 |
+| `tracking_status` | text | `observed` `lost` など / 空 | しない | tracking時の状態 |
+| `tracking_lost_frames` | text | lost継続frame数 / 空 | しない | TTLデバッグ用 |
 | `annotation_uid` | text | sidecar token | しない | 往復キー。空の新規boxはimportで採番 |
 | `map_candidate_id` | text | 最近傍候補way id / 空 | しない | 未マッチ検出の**軟対応**。誤対応の手掛かり(authoritativeな `map_traffic_light_id` は空のまま) |
 | `regulatory_element_id_candidate` | text | 候補wayのRE / 空 | しない | 同上。未マッチでもRE情報を残す |

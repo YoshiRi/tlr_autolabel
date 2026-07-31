@@ -193,6 +193,10 @@ def convert(xml_path: Path, dataset_root: Path) -> dict:
                         "detector_score": attrs.get("detector_score", ""),
                         "source_type": attrs.get("source_type")
                                        or ("manual" if is_new else "auto"),
+                        "temporal_source": attrs.get("temporal_source", ""),
+                        "track_id": attrs.get("track_id", ""),
+                        "tracking_status": attrs.get("tracking_status", ""),
+                        "tracking_lost_frames": attrs.get("tracking_lost_frames", ""),
                     },
                 }
             )

@@ -136,9 +136,11 @@ def annotation_rank(ann: dict, segment: dict) -> float:
     }.get(visibility, 0.45)
     source_weight = {
         "auto": 1.0,
+        "tracked": 0.9,
         "manual": 0.95,
         "cvat": 0.95,
         "projected_map": 0.75,
+        "propagated": 0.55,
         "interpolated": 0.6,
         "map_presence": 0.45,
     }.get(attrs.get("source_type", ""), 0.75)

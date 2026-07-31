@@ -33,7 +33,12 @@ LABEL_ATTRS = [
     ("facing", "text", "", False),
     ("raw_state", "text", "", False),
     ("detector_score", "text", "", False),
-    ("source_type", "select", "manual\nprojected_map\nauto\ninterpolated\nmap_presence", False),
+    ("source_type", "select",
+     "manual\nprojected_map\nauto\ntracked\npropagated\ninterpolated\nmap_presence", False),
+    ("temporal_source", "select", "observed\npropagated\nmap_presence", False),
+    ("track_id", "text", "", False),
+    ("tracking_status", "text", "", False),
+    ("tracking_lost_frames", "text", "", False),
     ("annotation_uid", "text", "", False),
     # soft association kept for unmatched detections (info not lost)
     ("map_candidate_id", "text", "", False),

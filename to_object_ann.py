@@ -248,12 +248,12 @@ def main():
                          "placeholder: the working-dataset placeholder RLE (renders a big "
                          "fill in t4devkit). real: box-rectangle pycocotools RLE (not "
                          "decoded by t4devkit).")
-    ap.add_argument("--drop-source-types", default="map_presence,interpolated",
+    ap.add_argument("--drop-source-types", default="map_presence,interpolated,propagated,tracked",
                     help="comma-separated sidecar source_type values to exclude from the "
-                         "delivered object_ann (default: map_presence,interpolated). These "
-                         "unverified map-projected / gap-filled boxes stay in the L3 sidecar "
-                         "but are kept out of the Tier B GT (only real 'auto' detections "
-                         "remain). Pass '' to keep every source_type.")
+                         "delivered object_ann (default: map_presence,interpolated,propagated,"
+                         "tracked). These review/recovery aids stay in the L3 sidecar but are "
+                         "kept out of the Tier B GT. Pass a custom list, or '' to keep every "
+                         "source_type.")
     ap.add_argument("--write-deprecated-map-association", action="store_true",
                     help="temporary compatibility only: also write deprecated "
                          "traffic_light_map_association.json. New consumers must use "

@@ -4,7 +4,7 @@
 (毎コミットではない)。役割分担: **能力・ゴール・成熟度はここだけ**、タスク
 (動詞)は PLAN、契約・IF・層は README、横断事実はプロジェクトメモリ。
 
-最終レビュー: 2026-07-23
+最終レビュー: 2026-07-29
 
 ## North Star
 
@@ -53,6 +53,7 @@
 | L1 タイル推論(遠方小信号) | G2 | works-here | ○ +20%検出/デグレ0(c1af6a38) |
 | L1 新モデル試走(素の --detector) | G3 | reproducible | ○ flexibility contract。多クラス/動的shape は明示エラー |
 | L3 地図マッチ(lanelet2 投影+Hungarian) | G2 | works-here | ○ 84.7%マッチ(6カメラ) |
+| L3 時系列tracking(High/Low association + TTL) | G2 | experimental | △ 明示`--temporal-tracking`時のみON。low候補は既存track更新のみ、短欠落は`propagated`。Tier B converter defaultでは`tracked`/`propagated`を除外し、review aid扱い。現在投影bbox優先、無い場合は前回投影/前回bboxでfallback。同じ(channel,map way)はTTL後再観測でもtrack_id再利用。`TemporalAssociator.update -> TrackingResult`に集約。設定は`configs/tracking/bytetrack-lite.yaml`。合成T4 integration + cb7fd5c0 full smoke pass |
 | L3 融合+自動補正(フリップ修復/方向スナップ/未マッチ分類) | G2 | works-here | ○ |
 | L3 タイムライン可視化(レビュー優先度付き) | G2 | works-here | ○ build/tl_match/re_timeline.html |
 | L4 CVAT 往復(人手レビュー→GT化) | G1/G2 | works-here | ○ ロスレス 299/299。bbox/visibility/reject/map id修正の主経路 |
@@ -60,7 +61,7 @@
 | L2 COCO / CVAT 出力 | G4 | works-here | ○ |
 | L2 AWML 派生データセット | G4 | experimental | △ 互換手段。実 create_data で未検証(PLAN 3, 優先度低) |
 | L4 deepen 変換 | G4 | experimental | △ 契約表のみ・変換は他リポジトリ・未検証 |
-| L6 評価(GTフリー指標: 距離別プロファイル/時間安定性) | G1 | experimental | △ evaluate_signals.py |
+| L6 評価(GTフリー指標: 距離別プロファイル/時間安定性) | G1 | experimental | △ evaluate_signals.py。`eval_detections.jsonl`はtracking source列(`source_type`/`temporal_source`/`track_id`)も保持 |
 | L6 評価(GT指標: 精度/PR、confusion) | G1 | **works-here** | ○ 実GT(ad266d7c 人手object_ann 518箱)でL1初測定: 検出P0.58/R0.85、状態精度0.78。`eval_vs_gt.py` |
 | A→B 標準t4変換(object_ann) | G4→core | works-here | ○ `to_object_ann.py`。AWML/COCO/Deepen/CVATは既存ツール委譲。自作exporterはdeprecated |
 | L5 ros2 パリティ検証 | G6 | not-started | ✗ 隔離中。受入=launch int8 と一致 |

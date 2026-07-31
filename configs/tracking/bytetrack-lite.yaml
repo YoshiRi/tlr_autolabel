@@ -1,0 +1,15 @@
+# Initial temporal association parameter profile for match_traffic_lights.py.
+#
+# High-score detections are controlled by match_traffic_lights.py --min-score.
+# Detections below that threshold can only update an existing map-way track when
+# temporal tracking is enabled with --temporal-tracking; they never create new
+# tracks.
+temporal_tracking:
+  low_score: 0.3
+  max_lost_frames: 3
+  min_iou: 0.01
+  center_gate_factor: 2.0
+  projection_gate_factor: 2.0
+  max_size_ratio: 8.0
+  propagate: true
+  propagate_state: false

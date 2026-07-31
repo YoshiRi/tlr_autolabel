@@ -260,6 +260,13 @@ def build_detection_records(sidecar: dict, pair_index: dict) -> list[dict]:
             "distance_m": distance,
             "distance_bin": bin_of(distance),
             "review_status": review,
+            "source_type": attr.get("source_type") or None,
+            "temporal_source": attr.get("temporal_source") or None,
+            "track_id": attr.get("track_id") or None,
+            "tracking_status": attr.get("tracking_status") or None,
+            "tracking_lost_frames": (int(attr["tracking_lost_frames"])
+                                     if str(attr.get("tracking_lost_frames") or "").isdigit()
+                                     else None),
             "gt_state": None if gt_state is None else (elements_key(parse_state(gt_state)) or "unknown"),
             "state_correct": None if gt_state is None
                              else (elements_key(parse_state(gt_state)) == state),
