@@ -24,9 +24,10 @@
 | 07-19 | L1 の新モデル試走対応: 多クラス yolox 一般化、動的shape/未知ファミリの明示エラー、プリセット env var 展開、README に flexibility contract(tiles はオプトイン) |
 | 07-19 | **L4 CVAT往復を当リポジトリへ移植 + 契約v2**: 属性契約 `docs/cvat_interop.md`(`traffic_signal_2d/v2`: 正準state text + signal_kind/visibility/review_status + raw_state/detector_score。circle/arrow select分解は不採用=同時多方向矢印・二重管理回避)。importはfail-loud検証(stateトークン文法・way id実在・RE id再導出)。往復ロスレス(CAM_FRONT 299/299)、aggregator v2回帰OK。dataset側の旧ペア・旧specはMOVED注記済み(削除可) |
 | 07-21 | **L4.5 RE timeline review基盤**: CVATのbbox/visibility修正と分離し、信号状態を物理信号グループ(`member_ways`)×時系列区間でレビューする `traffic_signal_re_review/v1` を追加。`render_re_review_timeline.py`(静的HTML編集UI)、`make_re_review_template.py`(ひな形生成)、`apply_re_review.py`(A' sidecarへ伝播) + `docs/re_timeline_review.md`。c1af6a38既存autolabelで smoke: 24 RE→8 group、62 segment、2376/2793 annotationへaccepted伝播、再aggregate成功 |
-| 07-27 | **B/B' IF再整理**: B' の差分を t4devkit 定義 `annotation/traffic_light.json` の有無に固定。schema は `{token, instance_token, traffic_light_linestring_id}`。RE/group は map から解決。`traffic_light_map_association.json` は temporary/deprecated と明記し、新規consumer禁止 |
+| 07-27 | **B/B' IF再整理**: B' の差分を t4devkit 定義 `annotation/traffic_light.json` の有無に固定。schema は `{token, instance_token, primitive_id}`。RE/group は map から解決。`traffic_light_map_association.json` は temporary/deprecated と明記し、新規consumer禁止 |
 | 07-28 | **B/B' IF文書の再明確化**: B/B'の正しいt4dataset IFは `object_ann.json` 系 + `traffic_light.json` のみと再確認。`traffic_signal_2d/v2` / `traffic_signal_re/v1` / `traffic_signal_re_review/v1` / `traffic_light_map_association.json` はこのRepo内のA/A'側またはtemporary/deprecated sidecarであり、B/B'判定・納品IFには含めない。 |
-| 07-31 | **TIER B IF再確認**: `annotation/traffic_light.json` は `{token, instance_token, traffic_light_linestring_id}`。B/B'差分はこのファイルの有無だけで、RE/group relationはmapから解決する。 |
+| 07-31 | **TIER B IF再確認**: `annotation/traffic_light.json` は `{token, instance_token, primitive_id}`。B/B'差分はこのファイルの有無だけで、RE/group relationはmapから解決する。 |
+| 07-31 | **フィールド名を t4devkit実スキーマへ統一**: `traffic_light.json` の第3フィールドを repo-local な `traffic_light_linestring_id` から t4devkit準拠の `primitive_id` へ全ファイル(コード/README/docs)でリネーム。schemaは引き続き `{token, instance_token, primitive_id}`(値は変わらずlanelet2 way id) |
 
 ## 📋 残タスク(実行順)
 
@@ -149,8 +150,8 @@ annotationの存在で自動有効化。
   `instance.json` は2D画像上の信号Instance識別だけを持ち、TLR ID / lanelet2 ID を入れない。
 - B'契約: B + `annotation/traffic_light.json`。BとB'の差分は**このファイルの有無だけ**で判定する。
   schemaは t4devkit 定義:
-  `{"token": "...", "instance_token": "...", "traffic_light_linestring_id": "501"}`。
-  必要なRE/group relationは全てmapにあり、`traffic_light_linestring_id` から解決する。
+  `{"token": "...", "instance_token": "...", "primitive_id": "501"}`。
+  必要なRE/group relationは全てmapにあり、`primitive_id` から解決する。
 - temporary/deprecated: `traffic_light_map_association.json` は旧 `object_ann_token -> map_traffic_light_id`
   互換ファイル。現行IFに乗らないJSONなのでB/B'判定に使わず、新規consumerを追加しない。
 - repo-local sidecar: `traffic_signal_2d/v2` / `traffic_signal_re/v1` /
@@ -160,7 +161,7 @@ annotationの存在で自動有効化。
       現行実装は map relation がある場合だけ `traffic_light.json` を出力し、無ければ未生成/削除してTier Bにする。
       移行互換として deprecated `traffic_light_map_association.json` は `--write-deprecated-map-association` 明示時だけ一時出力。
 - [x] t4devkit側(2026-07-27、`~/Documents/t4-devkit` main branch上): `SchemaName.TRAFFIC_LIGHT`(optional)
-      + `TrafficLight` テーブル(`{token, instance_token, traffic_light_linestring_id}`)を追加。
+      + `TrafficLight` テーブル(`{token, instance_token, primitive_id}`)を追加。
       `t4_devkit.lanelet.regulatory_element` に `group_traffic_light_linestrings` /
       `build_linestring_to_regulatory_element_index`(1 linestring : 1 RE を強制、違反は
       `AmbiguousRegulatoryElementError`) / `find_ambiguous_traffic_light_linestrings`(全列挙版)を実装し、
@@ -187,7 +188,7 @@ annotationの存在で自動有効化。
       DLR側(`driving_log_replayer_v2`)は変更不要と確認(`_EvaluationManagerBase.__init__` は
       `dataset_paths` を渡すだけで map path 別引数は無い)。テスト16件追加、既存137件(t4-devkit導入後)
       含め全パス。deprecated `traffic_light_map_association.json` はどちらの経路からも読まない。
-- [x] `to_object_ann.py` 追加検証: 1つの `instance_token` が複数 `traffic_light_linestring_id` に張られないよう
+- [x] `to_object_ann.py` 追加検証: 1つの `instance_token` が複数 `primitive_id` に張られないよう
       tracking時に異なるmap idの結合を禁止し、出力前にもfail-loud検証を追加(現IFでは通常1 instance = 1 map linestringを期待)。
 - [x] L2 IF smoke(2026-07-27): `/tmp/tlr_l2_if_test.czPyGT` に cb7fd5c0 dataset の軽量コピー(annotation実体、
       data/input_bag/mapはsymlink)を作成して `to_object_ann.py --sidecar` 実行。

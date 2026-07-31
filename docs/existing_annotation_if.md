@@ -50,12 +50,12 @@ and is a t4dataset annotation type defined in t4devkit:
 {
   "token": "relation-001",
   "instance_token": "instance-head-001",
-  "traffic_light_linestring_id": "501"
+  "primitive_id": "501"
 }
 ```
 
 `instance_token` points to the 2D `instance.json` row. The
-`traffic_light_linestring_id` points to the lanelet2 traffic-light linestring.
+`primitive_id` points to the lanelet2 traffic-light linestring.
 Regulatory-element and group relationships are already in the map and are
 resolved from that primitive. This repository must not encode those map
 identifiers in `object_ann`, `instance_token`, or `instance_name`.
@@ -72,7 +72,7 @@ Map identity is carried only by B':
 
 ```text
 annotation/traffic_light.json
-instance_token -> traffic_light_linestring_id
+instance_token -> primitive_id
 ```
 
 This is deliberate for now:
@@ -132,13 +132,13 @@ Allowed conversions:
   `box2d` to `bbox`, map visibility to occlusion, default truncation if absent.
 - A' -> B': same as A' -> B, plus write
   `instance_token -> attributes.map_traffic_light_id` as
-  `traffic_light.json.instance_token -> traffic_light_linestring_id` according
+  `traffic_light.json.instance_token -> primitive_id` according
   to the t4devkit schema.
 - B' -> A': join `object_ann.instance_token` to `traffic_light.json`, convert
   db_tlr category back to a canonical evaluator state where possible, copy
   `bbox` to `box2d`, and expose traffic-light / RE fields as A' review
   attributes. RE fields are resolved from the map via
-  `traffic_light_linestring_id`.
+  `primitive_id`.
 - B/B' -> detector evaluation GT: valid only when `bbox` is a real per-signal
   2D box.
 - Observed Evaluator Annotation -> RE review: valid if the frame-level state
@@ -440,7 +440,7 @@ annotation/category.json
 category name = traffic-light state
 bbox = 2D signal box
 attribute_tokens = truncation / light_status / occlusion metadata
-optional traffic_light.json = instance_token -> traffic_light_linestring_id
+optional traffic_light.json = instance_token -> primitive_id
 listdata/{train,val,test,all}.txt = split files
 ```
 

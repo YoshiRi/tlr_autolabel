@@ -1,6 +1,6 @@
 import unittest
 
-from temporal_association import TemporalAssociator, TemporalTrackingConfig
+from tlr_autolabel.tracking.temporal import TemporalAssociator, TemporalTrackingConfig
 
 
 class TemporalAssociatorTest(unittest.TestCase):

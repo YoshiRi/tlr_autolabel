@@ -15,7 +15,7 @@
 (テーブル構造は不変)。v1読み込みフォールバック: `raw_state` が無ければ
 `detector_signal` を読む。A' はCVATレビュー用の内部形式であり、t4dataset納品時の
 map identity は t4devkit 定義の `annotation/traffic_light.json`
-(`instance_token -> traffic_light_linestring_id`) に書く。RE / group relation は
+(`instance_token -> primitive_id`) に書く。RE / group relation は
 mapから解決する。`traffic_signal_2d_ann.json` 自体は標準t4dataset B/B'ではない。
 
 ```jsonc
@@ -45,8 +45,8 @@ mapから解決する。`traffic_signal_2d_ann.json` 自体は標準t4dataset B/
 | `signal_kind` | select | `vehicle` `pedestrian` `other` `unknown` / 導出値 | する | ped要素あり→`pedestrian`、要素あり→`vehicle`、なし→`unknown` で初期化 |
 | `visibility` | select | `full` `partial` `occluded` `unknown` / source別に既定 | する | **判定軸=「stateが読めるか」**。full=全体見える / partial=一部隠れ・見切れ・灯火一部だが**読める** / occluded=大半隠れ・枠外で**読めない**(信号は在る) / unknown=未確認。見切れ(truncation)もこの軸に畳む。既定: 検出box=full、map-presence=unknown |
 | `review_status` | select | `unchecked` `accepted` `rejected` `fixed` / `unchecked` | **する** | レビュー状態。評価のGTは `accepted`+`fixed` |
-| `map_traffic_light_id` | text | lanelet2 way id / 自動対応付け結果 | する | CVAT上のレビュー用キャッシュ。誤対応の修正可。空=対応なし。B'では `traffic_light.json.traffic_light_linestring_id` に反映 |
-| `regulatory_element_id` | text | relation idカンマ結合 / 導出値 | しない | 表示専用。B'では `traffic_light_linestring_id` からmapで解決 |
+| `map_traffic_light_id` | text | lanelet2 way id / 自動対応付け結果 | する | CVAT上のレビュー用キャッシュ。誤対応の修正可。空=対応なし。B'では `traffic_light.json.primitive_id` に反映 |
+| `regulatory_element_id` | text | relation idカンマ結合 / 導出値 | しない | 表示専用。B'では `primitive_id` からmapで解決 |
 | `facing` | text | `front` `back` / 導出値(未マッチは空) | しない | 灯器面の向き(linestring方向-90°回転の法線、本地図で実証済み)。`back` は筐体裏面の検出 — colored stateなら誤対応疑い |
 | `raw_state` | text | autolabelの元state | しない | 検出器の原文。人手修正後も不変(diff用) |
 | `detector_score` | text | 検出スコア / 空(手動box) | しない | provenance |
@@ -76,7 +76,7 @@ mapから解決する。`traffic_signal_2d_ann.json` 自体は標準t4dataset B/
 - **`regulatory_element_id` はA'上では導出/表示値**: 1つのTL wayを複数レーンの
   regulatory elementが共有するため人手管理は誤りやすい。t4dataset B'では
   t4devkit定義の `traffic_light.json` が `instance_token` と
-  `traffic_light_linestring_id` のRelationだけを持ち、RE / group relation はmapから解く。
+  `primitive_id` のRelationだけを持ち、RE / group relation はmapから解く。
 - CVAT実機検証済みのzipレイアウトを維持: `annotations.xml` +
   `images/{CHANNEL}_{frame}.jpg`(`images/` 直下必須)。
 

@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from xml.etree import ElementTree as ET
 
+from tlr_autolabel.core.io import load_json
 
 SIGNAL_LABELS = {"traffic_light"}
 
@@ -64,10 +65,6 @@ def cvat_labels_json() -> str:
             "default_value": vals[0] if input_type == "select" and vals else "",
         })
     return json.dumps([{"name": "traffic_light", "attributes": attrs}], indent=2)
-
-
-def load_json(path: Path):
-    return json.loads(path.read_text())
 
 
 def indent(element: ET.Element, level: int = 0) -> None:
