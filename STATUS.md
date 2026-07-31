@@ -49,6 +49,7 @@
 | 能力 | ゴール | 成熟度 | 状態・注意 |
 |---|---|---|---|
 | L1 検出+分類(YOLOX int8 engine / CoMLOps ONNX) | G2 | reproducible | ○ ~0.8s/frame(GPU)。engine は非移植(G5) |
+| L1 low raw candidates | G2 | experimental | △ `--det-low-score-thr`で`raw_detections`を出力。lowは既定未分類、`--classify-low-detections`で明示分類 |
 | L1 タイル推論(遠方小信号) | G2 | works-here | ○ +20%検出/デグレ0(c1af6a38) |
 | L1 新モデル試走(素の --detector) | G3 | reproducible | ○ flexibility contract。多クラス/動的shape は明示エラー |
 | L3 地図マッチ(lanelet2 投影+Hungarian) | G2 | works-here | ○ 84.7%マッチ(6カメラ) |

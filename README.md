@@ -348,6 +348,8 @@ autolabeling has no map_based_detector ROI prior to filter false positives):
 | flag | default | effect |
 |------|---------|--------|
 | `--det-score-thr` | 0.35 | node-parity recall; L3 map matching filters FPs (was 0.5 — that missed mid-range signals) |
+| `--det-low-score-thr` | unset | optional low threshold for temporal tracking candidates. When set below `--det-score-thr`, detections between the thresholds are written to `raw_detections`, but not promoted into `signals` |
+| `--classify-low-detections` | off | also classify low-threshold `raw_detections`. Default off keeps low candidates as bbox/score only so L3 can filter by map/time before any optional classification pass |
 | `--det-nms-thr` | 0.35 | IoU-NMS; lower = merge overlaps harder (node uses 0.7). Plus a containment rule merges nested tight/whole-signal duplicates, keeping the higher-score box |
 | `--min-box` | 8 | drop detections whose shorter side < N px |
 | `--drop-unknown` | off | drop signals whose classifier found no lamp (recommended for state autolabeling) |
@@ -407,6 +409,17 @@ GPU via `.engine`).
       ],
       "state": "green-arrow-up,red-circle"   // canonical rollup, see below
     }
+  ],
+  "raw_detections": [                        // optional; present only when
+                                             // --det-low-score-thr is set
+    {
+      "raw_detection_id": "00000-raw-00",
+      "detector_score": 0.24,
+      "box_xyxy": [1683, 712, 1753, 761],
+      "lamps": [],                            // low candidates are unclassified
+      "state": "unknown",                     // unless --classify-low-detections
+      "detection_level": "low"               // high | low vs --det-score-thr
+    }
   ]
 }
 ```
@@ -419,8 +432,11 @@ Rules: `state` and `lamps[].label` are derived (see the state spec below) and
 always re-derivable from the decomposed lamp fields; consumers should treat the
 decomposed fields as the source and the strings as convenience. `signals` may
 be empty (frame with no detection). `signal_id` is stable across re-runs of the
-same inputs, not across frames (no tracking yet). Any schema change bumps
-`schema_version`.
+same inputs, not across frames. `raw_detections` is an additive L3 tracking aid:
+low entries never create new L1 labels by themselves. Low raw detections are
+unclassified by default; use `--classify-low-detections` only when you want the
+old eager-classification behavior for analysis. Incompatible schema changes bump
+`schema_version`; additive optional fields keep the v1 reader contract.
 
 The Autoware model-store LampRecognizer is YOLOX-based internally, but Tier A
 uses it as a classifier. Its internal lamp detections are decoded only into

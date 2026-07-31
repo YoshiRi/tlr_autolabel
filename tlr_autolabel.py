@@ -343,18 +343,19 @@ def tile_origins(size, net, min_overlap=128):
     return [round(i * (size - net) / (n - 1)) for i in range(n)]
 
 
-def detect_full_and_tiles(detector, img, args):
+def detect_full_and_tiles(detector, img, args, score_thr=None):
     """Full-frame letterboxed pass, plus (with --tiles) native-resolution tile
     passes, merged by one global NMS in original pixel coords. Tiles overlap by
     >= min_overlap px so a signal cut at one tile's edge is seen whole by the
     neighbour; the containment rule in det_nms then merges the clipped duplicate."""
-    dets = detect_in_orig(detector, img, args.det_score_thr)
+    score_thr = args.det_score_thr if score_thr is None else score_thr
+    dets = detect_in_orig(detector, img, score_thr)
     if args.tiles:
         ih, iw = img.shape[:2]
         for oy in tile_origins(ih, detector.h, args.tile_overlap):
             for ox in tile_origins(iw, detector.w, args.tile_overlap):
                 tile = img[oy:oy + detector.h, ox:ox + detector.w]
-                for b in detect_in_orig(detector, tile, args.det_score_thr):
+                for b in detect_in_orig(detector, tile, score_thr):
                     b["x1"] += ox; b["x2"] += ox
                     b["y1"] += oy; b["y2"] += oy
                     dets.append(b)
@@ -464,25 +465,45 @@ class LampClassifier:
         )
 
 
-def process_image(img, detector, classifier, args):
+def process_image_with_candidates(img, detector, classifier, args):
     ih, iw = img.shape[:2]
-    boxes = detect_full_and_tiles(detector, img, args)
+    score_thr = (args.det_low_score_thr
+                 if args.det_low_score_thr is not None
+                 else args.det_score_thr)
+    boxes = detect_full_and_tiles(detector, img, args, score_thr=score_thr)
 
     results = []
+    raw_detections = []
     for b in boxes:
         box_xyxy = clipped_detection_box(b, iw, ih, args.min_box)
         if box_xyxy is None:
             continue
-        lamps = normalize_lamps(classifier.classify(img, box_xyxy))
-        if args.drop_unknown and not lamps:
-            continue
-        results.append({
+        is_high = b["prob"] >= args.det_score_thr
+        lamps = []
+        if is_high or args.classify_low_detections:
+            lamps = normalize_lamps(classifier.classify(img, box_xyxy))
+        candidate = {
             "detector_score": round(b["prob"], 4),
             "box_xyxy": list(box_xyxy),
             "lamps": lamps,
             "state": signal_state(lamps),
-        })
-    return results
+            "detection_level": "high" if is_high else "low",
+        }
+        raw_detections.append(dict(candidate))
+        if is_high:
+            if args.drop_unknown and not lamps:
+                continue
+            results.append({
+                "detector_score": candidate["detector_score"],
+                "box_xyxy": candidate["box_xyxy"],
+                "lamps": candidate["lamps"],
+                "state": candidate["state"],
+            })
+    return results, raw_detections
+
+
+def process_image(img, detector, classifier, args):
+    return process_image_with_candidates(img, detector, classifier, args)[0]
 
 
 def draw(img, results):
@@ -586,6 +607,15 @@ def main():
     # detector at node-parity recall and let the map matching sort out FPs.
     # nms stays tighter than the node's 0.7 to merge duplicate boxes on one signal.
     ap.add_argument("--det-score-thr", type=float, default=0.35)
+    ap.add_argument("--det-low-score-thr", type=float, default=None,
+                    help="Optional low detector threshold for temporal tracking candidates. "
+                         "When set below --det-score-thr, detections between the two "
+                         "thresholds are written to raw_detections but do not enter "
+                         "signals, so they cannot create new L1 labels.")
+    ap.add_argument("--classify-low-detections", action="store_true",
+                    help="Also run the classifier on low-threshold raw_detections. "
+                         "By default low candidates keep only bbox/score so L3 can "
+                         "first filter them by temporal/map association.")
     ap.add_argument("--det-nms-thr", type=float, default=0.35)
     ap.add_argument("--cls-score-thr", type=float, default=0.2)
     ap.add_argument("--cls-nms-thr", type=float, default=0.2)
@@ -624,6 +654,8 @@ def main():
     if not args.detector:
         raise SystemExit("choose a detector: --preset <name> "
                          f"(available: {', '.join(list_presets())}) or --detector <model path>")
+    if args.det_low_score_thr is not None and args.det_low_score_thr > args.det_score_thr:
+        raise SystemExit("--det-low-score-thr must be <= --det-score-thr")
     # model paths given directly may also use ~ / $VARS / ${TLR_MODEL_ROOT}
     args.detector = expand_path(args.detector)
     args.classifier = expand_path(args.classifier)
@@ -697,6 +729,8 @@ def main():
         "classifier_backend": classifier.backend,
         "tiles": bool(args.tiles),
         "det_score_thr": args.det_score_thr,
+        "det_low_score_thr": args.det_low_score_thr,
+        "classify_low_detections": bool(args.classify_low_detections),
         "det_nms_thr": args.det_nms_thr,
         "cls_score_thr": args.cls_score_thr,
         "cls_nms_thr": args.cls_nms_thr,
@@ -713,7 +747,7 @@ def main():
         if img is None:
             print(f"[skip] {p}")
             continue
-        results = process_image(img, detector, classifier, args)
+        results, raw_detections = process_image_with_candidates(img, detector, classifier, args)
         name = os.path.splitext(os.path.basename(p))[0]
         print(f"\n=== {os.path.basename(p)} ({img.shape[1]}x{img.shape[0]}): "
               f"{len(results)} signal(s) ===")
@@ -731,16 +765,22 @@ def main():
             frame_index = int(name) if name.isdigit() else seq
             for i, r in enumerate(results):
                 results[i] = {"signal_id": f"{name}-{i:02d}", **r}
+            if args.det_low_score_thr is not None:
+                for i, r in enumerate(raw_detections):
+                    raw_detections[i] = {"raw_detection_id": f"{name}-raw-{i:02d}", **r}
+            payload = {"schema_version": "tlr_autolabel/v1",
+                       "image": rel,
+                       "image_realpath": rp,
+                       "sample_data_token": sd["token"] if sd else None,
+                       "channel": channel,
+                       "frame_index": frame_index,
+                       "width": img.shape[1], "height": img.shape[0],
+                       "meta": meta,
+                       "signals": results}
+            if args.det_low_score_thr is not None:
+                payload["raw_detections"] = raw_detections
             with open(os.path.join(args.out_dir, name + ".json"), "w") as f:
-                json.dump({"schema_version": "tlr_autolabel/v1",
-                           "image": rel,
-                           "image_realpath": rp,
-                           "sample_data_token": sd["token"] if sd else None,
-                           "channel": channel,
-                           "frame_index": frame_index,
-                           "width": img.shape[1], "height": img.shape[0],
-                           "meta": meta,
-                           "signals": results}, f, indent=2, ensure_ascii=False)
+                json.dump(payload, f, indent=2, ensure_ascii=False)
             if args.viz:
                 cv2.imwrite(os.path.join(args.out_dir, name + ".viz.png"), draw(img, results))
 
