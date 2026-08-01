@@ -5,7 +5,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from match_traffic_lights import load_lanelet2_traffic_lights, load_t4_index, project_traffic_lights
+from tlr_autolabel.map.lanelet2 import load_lanelet2_traffic_lights
+from tlr_autolabel.map.projection import project_traffic_lights
+from tlr_autolabel.t4.index import load_t4_index
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -124,7 +126,7 @@ def write_synthetic_dataset(root: Path, *, low_state: str = "green-circle",
 
 def run_match(dataset_root: Path, *args):
     subprocess.run(
-        [sys.executable, str(ROOT / "match_traffic_lights.py"), "--dataset-root", str(dataset_root), *args],
+        [sys.executable, str(ROOT / "scripts" / "match_traffic_lights.py"), "--dataset-root", str(dataset_root), *args],
         cwd=ROOT,
         check=True,
         text=True,

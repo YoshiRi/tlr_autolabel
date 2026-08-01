@@ -1,8 +1,8 @@
 # CVAT interop contract (L4, A' sidecar <-> CVAT)
 
 信号アノテーションのCVAT往復(人手検証ラウンド)の契約。ツール:
-`export_cvat_signal_task.py`(A' sidecar → CVATタスクzip)/
-`import_cvat_signal_annotations.py`(CVAT XML → A' sidecar)。
+`scripts/export_cvat_signal_task.py`(A' sidecar → CVATタスクzip)/
+`scripts/import_cvat_signal_annotations.py`(CVAT XML → A' sidecar)。
 状態語彙は README の正準stateトークン仕様(`{color}-{shape}[-{direction}]`、
 ソート・カンマ結合)を全属性で共有する。
 
@@ -71,7 +71,7 @@ mapから解決する。`traffic_signal_2d_ann.json` 自体は標準t4dataset B/
   CVAT上の `state` は局所修正・互換・diff表示のために残すが、複数フレーム/
   複数カメラ/複数REにまたがる信号状態は
   `traffic_signal_re_review/v1`(`docs/re_timeline_review.md`)で
-  `signal_group_id` と時間区間に対して管理し、`apply_re_review.py` で A' sidecar へ
+  `signal_group_id` と時間区間に対して管理し、`scripts/apply_re_review.py` で A' sidecar へ
   伝播する。CVATは bbox / visibility / reject / map id 修正に集中させる。
 - **`regulatory_element_id` はA'上では導出/表示値**: 1つのTL wayを複数レーンの
   regulatory elementが共有するため人手管理は誤りやすい。t4dataset B'では
@@ -112,15 +112,15 @@ source_type が全部**ドロップダウン**になる(手入力不要)。
 
 ```bash
 # 1. A' sidecar生成(match_traffic_lights.py が v2 属性で出力)
-python3 match_traffic_lights.py --dataset-root <dataset>
+python3 scripts/match_traffic_lights.py --dataset-root <dataset>
 #    (RE検証レポートも: aggregate_regulatory_signals.py --dataset-root <dataset>)
 # 2. CVATタスクzip生成。--min-priority で「怪しいフレームだけ」の集中タスクに
 #    できる(下記「高速レビュー」参照)
-python3 export_cvat_signal_task.py --dataset-root <dataset> --camera CAM_FRONT \
+python3 scripts/export_cvat_signal_task.py --dataset-root <dataset> --camera CAM_FRONT \
     --count 0 --min-priority 1.0
 # 3. CVATへzipをタスクとしてインポート → レビュー(state修正、review_status設定)
 # 4. CVAT XMLエクスポート → 取り込み(検証+正規化)
-python3 import_cvat_signal_annotations.py exported.xml --dataset-root <dataset> \
+python3 scripts/import_cvat_signal_annotations.py exported.xml --dataset-root <dataset> \
     --output annotation/traffic_signal_2d_ann.json
 ```
 
@@ -131,9 +131,9 @@ autolabel予測として突き合わせる。
 修正をA' sidecarへ戻した後に:
 
 ```bash
-python3 aggregate_regulatory_signals.py --dataset-root <dataset>
-python3 render_re_review_timeline.py --dataset-root <dataset>
-python3 apply_re_review.py --dataset-root <dataset> \
+python3 scripts/aggregate_regulatory_signals.py --dataset-root <dataset>
+python3 scripts/render_re_review_timeline.py --dataset-root <dataset>
+python3 scripts/apply_re_review.py --dataset-root <dataset> \
   --review annotation/traffic_signal_re_review.json \
   --output annotation/traffic_signal_2d_ann.reviewed.json
 ```

@@ -29,7 +29,7 @@ def add_sample_table(root: Path) -> None:
 
 def run_script(name: str, *args) -> subprocess.CompletedProcess:
     return subprocess.run(
-        [sys.executable, str(ROOT / name), *args],
+        [sys.executable, str(ROOT / "scripts" / name), *args],
         cwd=ROOT, check=True, text=True,
         stdout=subprocess.PIPE, stderr=subprocess.PIPE,
     )

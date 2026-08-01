@@ -6,7 +6,7 @@ This is an adapter/orchestration layer, not a new canonical IF. It takes:
   - geometry/map relation from traffic_signal_2d/v2
   - state decisions from traffic_signal_re_review/v1, or from traffic_signal_re/v1
 
-and writes a derived t4dataset using to_object_ann.py:
+and writes a derived t4dataset using tlr_autolabel.t4.convert:
 
   B:  object_ann/category/attribute/instance
   B': B + traffic_light.json when map relations exist
@@ -24,10 +24,9 @@ import sys
 import tempfile
 from pathlib import Path
 
-from apply_re_review import apply_review, normalize_decisions, timestamps_by_sample
-from make_re_review_template import build_template
+from tlr_autolabel.review.re_apply import apply_review, normalize_decisions, timestamps_by_sample
+from tlr_autolabel.review.re_template import build_template
 
-HERE = Path(__file__).resolve().parent
 APPLY_STATUSES = {"accepted", "fixed", "rejected"}
 
 
@@ -116,7 +115,8 @@ def write_temp_sidecar(reviewed: dict, keep_path: Path | None) -> Path:
 def run_to_object_ann(args: argparse.Namespace, sidecar_path: Path) -> None:
     cmd = [
         sys.executable,
-        str(HERE / "to_object_ann.py"),
+        "-m",
+        "tlr_autolabel.t4.convert",
         "--t4-dataset",
         str(args.dataset_root),
         "--sidecar",
@@ -174,7 +174,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--write-deprecated-map-association",
         action="store_true",
-        help="temporary compatibility only; passes through to to_object_ann.py",
+        help="temporary compatibility only; passes through to tlr_autolabel.t4.convert",
     )
     parser.add_argument(
         "--allow-empty-application",

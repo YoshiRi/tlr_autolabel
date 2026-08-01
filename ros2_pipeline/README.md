@@ -65,7 +65,7 @@ python3 ros2_pipeline/parity_check.py /tmp/par/offline /tmp/par/ros2 --iou 0.5 -
 
 ```bash
 # args: <image_dir> <out_dir> [camera_ns] [rate_hz] [limit(0=all)]
-scripts/tlr_autolabel/ros2_pipeline/run_ros2_autolabel.sh \
+ros2_pipeline/run_ros2_autolabel.sh \
     ~/.webauto/.../0/data/CAM_FRONT  ~/tlr_labels_ros2/CAM_FRONT  cam_front  2  0
 # engines are cached after the first run; subsequent runs: SKIP_BUILD=1 ...
 ```
@@ -95,7 +95,7 @@ keep them on different models, or pre-build once.
   `/opt/autoware/mlmodels/`.
 
 ## vs the ONNX path (parent dir)
-Both produce the same JSON schema. The ONNX path (`../tlr_autolabel.py`, GPU via
+Both produce the same JSON schema. The ONNX path (`../scripts/tlr_autolabel.py`, GPU via
 `../run_gpu.sh`) is portable and fast to iterate; this ROS path is the ground
 truth (exact production nodes, int8). Use the ONNX `.engine` detector option to
 get most of the int8 benefit without the full graph.

@@ -68,12 +68,12 @@ Schema:
 }
 ```
 
-`state` uses the canonical README vocabulary. `apply_re_review.py` validates
+`state` uses the canonical README vocabulary. `scripts/apply_re_review.py` validates
 tokens with the same parser used by CVAT import.
 
 ## Application rules
 
-`apply_re_review.py` reads A' and this review sidecar, then writes a new
+`scripts/apply_re_review.py` reads A' and this review sidecar, then writes a new
 reviewed A' sidecar. It never edits the input file in place.
 
 For an A' annotation, a decision matches when:
@@ -102,21 +102,21 @@ Use existing autolabel/map outputs; do not rerun L1 just for review.
 ```bash
 # 1. Optional static editor for manual review. It also generates representative
 #    crop candidates from the A' sidecar.
-python3 render_re_review_timeline.py --dataset-root <dataset>
+python3 scripts/render_re_review_timeline.py --dataset-root <dataset>
 
 # 2. Optional JSON template. Default status is unchecked.
-python3 make_re_review_template.py --dataset-root <dataset> \
+python3 scripts/make_re_review_template.py --dataset-root <dataset> \
   --output annotation/traffic_signal_re_review.template.json
 
 # 3. Apply a reviewed JSON to the current A' sidecar
-python3 apply_re_review.py --dataset-root <dataset> \
+python3 scripts/apply_re_review.py --dataset-root <dataset> \
   --review annotation/traffic_signal_re_review.json \
   --output annotation/traffic_signal_2d_ann.reviewed.json
 
 # 4. Verify that the reviewed sidecar still feeds L3/L6
-python3 aggregate_regulatory_signals.py --dataset-root <dataset> \
+python3 scripts/aggregate_regulatory_signals.py --dataset-root <dataset> \
   --input annotation/traffic_signal_2d_ann.reviewed.json
-python3 evaluate_signals.py --dataset-root <dataset> \
+python3 scripts/evaluate_signals.py --dataset-root <dataset> \
   --sidecar annotation/traffic_signal_2d_ann.reviewed.json
 ```
 
@@ -125,10 +125,10 @@ python3 evaluate_signals.py --dataset-root <dataset> \
 Using the current autolabel output as a provisional accepted review:
 
 ```bash
-python3 make_re_review_template.py --dataset-root <dataset> \
+python3 scripts/make_re_review_template.py --dataset-root <dataset> \
   --review-status accepted \
   --output build/tl_match/re_review.accept_autolabel.json
-python3 apply_re_review.py --dataset-root <dataset> \
+python3 scripts/apply_re_review.py --dataset-root <dataset> \
   --review build/tl_match/re_review.accept_autolabel.json \
   --output build/tl_match/traffic_signal_2d_ann.review_smoke.json
 ```
@@ -146,7 +146,7 @@ This smoke output is a plumbing check, not a human-verified GT.
 
 ## Representative crop candidates
 
-`render_re_review_timeline.py` generates crop images under
+`scripts/render_re_review_timeline.py` generates crop images under
 `build/tl_match/re_review_assets/` by default and embeds candidate metadata into
 the static HTML. When a reviewer clicks a timeline segment, the right pane
 shows the top crop and buttons to switch among the remaining candidates.
@@ -169,7 +169,7 @@ Candidate selection is intentionally heuristic and review-oriented:
 Useful knobs:
 
 ```bash
-python3 render_re_review_timeline.py --dataset-root <dataset> \
+python3 scripts/render_re_review_timeline.py --dataset-root <dataset> \
   --crop-candidates 8 \
   --crop-margin 1.5 \
   --crop-channels CAM_FRONT,CAM_FRONT_LEFT,CAM_FRONT_RIGHT \

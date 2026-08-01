@@ -24,7 +24,7 @@ import sys
 
 # reuse the project's canonical state parsing (single source of truth)
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from state_tokens import parse_state, elements_key  # noqa: E402
+from tlr_autolabel.core.state_tokens import parse_state, elements_key  # noqa: E402
 
 
 def iou(a, b):

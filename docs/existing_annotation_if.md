@@ -169,7 +169,7 @@ Blocked or lossy conversions:
   - `traffic_light` ways: 261
   - `light_bulbs` entries: 261
   - traffic-light regulatory elements: 234
-  - ways with regulatory element from `match_traffic_lights.py`: 259
+  - ways with regulatory element from `scripts/match_traffic_lights.py`: 259
 
 Existing annotation files:
 
@@ -432,7 +432,7 @@ Training Annotation is not equivalent to Evaluator A'/RE IF without a conversion
 ### Training IF Implications
 
 For training compatibility, this dataset should be treated as the target style
-that `to_object_ann.py` writes (standard object_ann):
+that `scripts/to_object_ann.py` writes (standard object_ann):
 
 ```text
 annotation/object_ann.json

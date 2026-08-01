@@ -27,8 +27,8 @@ from pathlib import Path
 
 import numpy as np
 
-from state_tokens import elements_key, parse_state
-from temporal_association import TemporalAssociator, TemporalTrackingConfig
+from tlr_autolabel.core.state_tokens import elements_key, parse_state
+from tlr_autolabel.tracking.temporal import TemporalAssociator, TemporalTrackingConfig
 from tlr_autolabel.map.association import (
     _build_cost,
     _solve_assignment,
@@ -47,6 +47,7 @@ from tlr_autolabel.map.projection import (
     quat_to_rot,
 )
 from tlr_autolabel.t4.index import load_t4_index
+from tlr_autolabel.tracking.inputs import collect_low_tracking_candidates, detector_score
 
 
 # ---------------------------------------------------------------- state labels
@@ -69,11 +70,7 @@ def signal_kind(elements: list[dict]) -> str:
     return "vehicle" if elements else "unknown"
 
 
-def detector_score(signal_entry, default=1.0) -> float:
-    score = signal_entry.get("detector_score", default)
-    if score is None or score == "":
-        return default
-    return float(score)
+REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 def load_tracking_config(args) -> TemporalTrackingConfig:
@@ -84,6 +81,7 @@ def load_tracking_config(args) -> TemporalTrackingConfig:
         if not config_path.is_absolute():
             candidates = [
                 config_path,
+                REPO_ROOT / config_path,
                 Path(__file__).resolve().parent / config_path,
                 args.dataset_root / config_path,
             ]
@@ -117,35 +115,6 @@ def load_tracking_config(args) -> TemporalTrackingConfig:
     if args.tracking_propagate_state:
         cfg = TemporalTrackingConfig.from_mapping({**cfg.__dict__, "propagate_state": True})
     return cfg
-
-
-def collect_low_tracking_candidates(payload, high_threshold, low_threshold):
-    """Return classified low-confidence candidates without duplicating highs.
-
-    Newer L1 JSONs may carry raw_detections down to --det-low-score-thr. Older
-    runs only have signals; those can still serve as low candidates when L1 was
-    run below match_traffic_lights.py --min-score.
-    """
-    low = []
-    high_boxes = []
-    for det in payload.get("signals", []):
-        score = detector_score(det)
-        if score >= high_threshold:
-            high_boxes.append(det["box_xyxy"])
-        elif score >= low_threshold:
-            low.append(det)
-
-    for det in payload.get("raw_detections", []):
-        score = detector_score(det)
-        if score < low_threshold or score >= high_threshold:
-            continue
-        box = det["box_xyxy"]
-        if any(iou(box, existing) >= 0.98 for existing in high_boxes):
-            continue
-        if any(iou(box, existing["box_xyxy"]) >= 0.98 for existing in low):
-            continue
-        low.append(det)
-    return low
 
 
 # ------------------------------------------------------------------------ main

@@ -1,7 +1,7 @@
-"""Unit tests for tlr_autolabel/map/association.py (REFACTOR_PLAN.md phase 5
-extraction from match_traffic_lights.py). Also pins that match_traffic_lights.py
-re-exports the identical package functions, so the old top-level import path
-used by existing tests/scripts keeps working unchanged.
+"""Unit tests for tlr_autolabel/map/association.py.
+
+The matching helpers are package-level reusable functions; the CLI entrypoint
+under scripts/ imports them.
 """
 import unittest
 
@@ -38,16 +38,14 @@ class MatchBoxesLegacyTest(unittest.TestCase):
         self.assertEqual(match_boxes_legacy([], []), ({}, {}))
 
 
-class ReexportIdentityTest(unittest.TestCase):
-    def test_match_traffic_lights_reexports_same_objects(self):
-        import match_traffic_lights as mtl
+class PackageExportTest(unittest.TestCase):
+    def test_package_exposes_matching_helpers(self):
         from tlr_autolabel.map import association
 
-        self.assertIs(mtl.iou, association.iou)
-        self.assertIs(mtl.center, association.center)
-        self.assertIs(mtl.match_boxes_legacy, association.match_boxes_legacy)
-        self.assertIs(mtl.match_boxes_staged, association.match_boxes_staged)
-        self.assertIs(mtl.unmatched_reason, association.unmatched_reason)
+        self.assertIs(iou, association.iou)
+        self.assertIs(center, association.center)
+        self.assertIs(match_boxes_legacy, association.match_boxes_legacy)
+        self.assertIs(unmatched_reason, association.unmatched_reason)
 
 
 if __name__ == "__main__":

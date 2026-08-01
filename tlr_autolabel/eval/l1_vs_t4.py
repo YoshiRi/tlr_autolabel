@@ -24,7 +24,7 @@ import json
 from collections import Counter, defaultdict
 from pathlib import Path
 
-from state_tokens import elements_key, parse_state
+from tlr_autolabel.core.state_tokens import elements_key, parse_state
 
 
 def iou(a: list[float], b: list[float]) -> float:

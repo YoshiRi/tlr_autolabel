@@ -2,15 +2,14 @@
 (REFACTOR_PLAN.md phase 6). Extracted from tlr_autolabel.py.
 
 The per-crop decode itself (canonical LampRecognizer output format) stays in
-tlr_lamp_recognizer_onnx.py, which this module imports -- that file is
-already the single shared decode implementation used both here and by its
-own single-crop debug CLI.
+tlr_autolabel.inference.lamp_recognizer_onnx, the single shared decode
+implementation used both here and by its own single-crop debug CLI.
 """
 import numpy as np
 
 from tlr_autolabel.inference.detector import make_session
 from tlr_autolabel.inference.trt import TrtServer
-from tlr_lamp_recognizer_onnx import (
+from tlr_autolabel.inference.lamp_recognizer_onnx import (
     COLORS, SHAPES, arrow_of, decode as classify_decode,
     load_model_params, nms as cls_nms, preprocess as cls_preprocess,
 )

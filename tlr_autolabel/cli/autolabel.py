@@ -11,22 +11,22 @@ output count:
                grid/stride decode, num_class=1)
   3 outputs -> CoMLOps-Large-Detection-Model (darknet YOLO style: RGB, /255,
                5 anchors x (4 box + obj + 10 cls) per scale, strides 8/16/32,
-               bw = pw*(2*sig(tw))^2; anchors from comlops_large_detector_ml.param.yaml,
+               bw = pw*(2*sig(tw))^2; anchors from configs/model_params/comlops_large_detector_ml.param.yaml,
                empirically fitted -- see that yaml's header).
                Kept classes default to TRAFFIC_LIGHT only (--det-classes).
 
-Reuses the faithful classifier decode from tlr_lamp_recognizer_onnx.py.
+Reuses the faithful classifier decode from tlr_autolabel.inference.lamp_recognizer_onnx.
 
 Usage:
   # 1) verification pass on a few images, write annotated pngs to eyeball
-  python3 tlr_autolabel.py <image_or_dir> --viz --out-dir ./out
+  python3 scripts/tlr_autolabel.py <image_or_dir> --viz --out-dir ./out
 
   # 2) once inference looks right, run over the dataset for labels
-  python3 tlr_autolabel.py <dir> --out-dir ./labels
+  python3 scripts/tlr_autolabel.py <dir> --out-dir ./labels
 
   # detector selection: named preset (configs/detectors/*.yaml) or explicit path
-  python3 tlr_autolabel.py <dir> --preset yolox-1920-int8
-  python3 tlr_autolabel.py <dir> --detector .../CoMLOps-Large-Detection-Model-v1.0.1.onnx
+  python3 scripts/tlr_autolabel.py <dir> --preset yolox-1920-int8
+  python3 scripts/tlr_autolabel.py <dir> --detector .../CoMLOps-Large-Detection-Model-v1.0.1.onnx
 """
 import argparse
 import glob
@@ -34,6 +34,7 @@ import json
 import os
 import uuid
 from datetime import datetime, timezone
+from pathlib import Path
 
 import cv2
 
@@ -44,7 +45,7 @@ from tlr_autolabel.inference.detector import (
 )
 from tlr_autolabel.inference.lamp_recognizer import LampClassifier, normalize_lamps, signal_state
 
-HERE = os.path.dirname(os.path.abspath(__file__))
+REPO_ROOT = str(Path(__file__).resolve().parents[2])
 
 
 def process_image_with_candidates(img, detector, classifier, args):
@@ -103,7 +104,7 @@ def draw(img, results):
     return vis
 
 
-PRESET_DIR = os.path.join(HERE, "configs", "detectors")
+PRESET_DIR = os.path.join(REPO_ROOT, "configs", "detectors")
 
 # Search order for the ML model root, matching Autoware launch's `data_path`
 # default at the end so presets resolve the same on a deployed machine.
@@ -174,9 +175,9 @@ def main():
                          f"(available: {', '.join(list_presets())})")
     ap.add_argument("--detector", default=None,
                     help="detector model path (.onnx or .engine); overrides the preset's")
-    ap.add_argument("--classifier", default=os.path.join(HERE, "traffic_light_lamp_recognizer_comlops.onnx"))
-    ap.add_argument("--classifier-param", default=os.path.join(HERE, "lamp_recognizer_ml.param.yaml"))
-    ap.add_argument("--comlops-param", default=os.path.join(HERE, "comlops_large_detector_ml.param.yaml"),
+    ap.add_argument("--classifier", default=os.path.join(REPO_ROOT, "models", "traffic_light_lamp_recognizer_comlops.onnx"))
+    ap.add_argument("--classifier-param", default=os.path.join(REPO_ROOT, "configs", "model_params", "lamp_recognizer_ml.param.yaml"))
+    ap.add_argument("--comlops-param", default=os.path.join(REPO_ROOT, "configs", "model_params", "comlops_large_detector_ml.param.yaml"),
                     help="decode params (anchors etc.) for the CoMLOps darknet detector")
     ap.add_argument("--det-classes", default="TRAFFIC_LIGHT",
                     help="comma-separated class names kept from the CoMLOps detector")

@@ -1,6 +1,6 @@
 # L6 evaluation ledgers (`tlr_eval/v2`)
 
-`evaluate_signals.py` emits three **tidy long-format ledgers** as the reusable
+`scripts/evaluate_signals.py` emits three **tidy long-format ledgers** as the reusable
 analysis artifacts. One row = one unit of observation; every slicing dimension
 is a column, so any post-hoc cut (pedestrian vs vehicle, per lamp
 color/shape/arrow, facing, channel, distance, matched/unmatched, reviewed/not)

@@ -51,7 +51,7 @@ def write_source_dataset(root: Path) -> None:
 
 def run_export(src: Path, out: Path) -> subprocess.CompletedProcess:
     return subprocess.run(
-        [sys.executable, str(ROOT / "export_object_ann_to_t4dataset.py"),
+        [sys.executable, str(ROOT / "scripts" / "export_object_ann_to_t4dataset.py"),
          "--dataset-root", str(src), "--out", str(out)],
         cwd=ROOT, check=True, text=True,
         stdout=subprocess.PIPE, stderr=subprocess.PIPE,
@@ -93,7 +93,7 @@ class ExportObjectAnnContractTest(unittest.TestCase):
             root = Path(tmp)
             write_source_dataset(root)
             result = subprocess.run(
-                [sys.executable, str(ROOT / "export_object_ann_to_t4dataset.py"),
+                [sys.executable, str(ROOT / "scripts" / "export_object_ann_to_t4dataset.py"),
                  "--dataset-root", str(root), "--out", str(root)],
                 cwd=ROOT, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             )

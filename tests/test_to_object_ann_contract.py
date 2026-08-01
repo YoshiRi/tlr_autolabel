@@ -60,7 +60,7 @@ def write_sidecar(path: Path, *, map_traffic_light_id: str) -> None:
 
 def run_to_object_ann(dataset_root: Path, out_dir: Path, sidecar: Path):
     subprocess.run(
-        [sys.executable, str(ROOT / "to_object_ann.py"),
+        [sys.executable, str(ROOT / "scripts" / "to_object_ann.py"),
          "--t4-dataset", str(dataset_root), "--out", str(out_dir),
          "--sidecar", str(sidecar)],
         cwd=ROOT, check=True, text=True,

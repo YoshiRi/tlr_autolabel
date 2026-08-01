@@ -26,6 +26,8 @@ import sys
 import tempfile
 from pathlib import Path
 
+import _bootstrap  # noqa: F401
+
 HERE = Path(__file__).resolve().parent
 DIST_BINS = ["0-30m", "30-60m", "60-100m", "100-150m", ">=150m"]
 
@@ -42,8 +44,7 @@ def run_match(dataset_root: Path, labels: Path, out_report: Path):
 
 def profile(report_path: Path):
     """coverage/unknown/iou by distance bin + overall counts from a match_report."""
-    sys.path.insert(0, str(HERE))
-    from evaluate_signals import detection_profile  # reuse the canonical logic
+    from tlr_autolabel.eval.signals import detection_profile  # reuse the canonical logic
     rep = json.loads(report_path.read_text())
     prof, unmatched = detection_profile(rep, {})
     n_det = sum(f["n_detections"] for f in rep["frames"])

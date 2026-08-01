@@ -32,7 +32,7 @@ from xml.etree import ElementTree as ET
 
 # ------------------------------------------------------------- detector signal
 # Token parsing is shared with the rest of the repo (canonical + legacy forms).
-from state_tokens import bulb_color, elements_key, parse_state
+from tlr_autolabel.core.state_tokens import bulb_color, elements_key, parse_state
 
 # box shorter side (px) at/above which a lamp read is treated as fully reliable;
 # smaller boxes get proportionally less vote weight (cross-camera resolution
