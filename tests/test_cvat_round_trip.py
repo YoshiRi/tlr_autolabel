@@ -32,7 +32,7 @@ def add_image_dims(root: Path, width: int = 200, height: int = 200) -> None:
 
 def run_script(name: str, *args) -> None:
     subprocess.run(
-        [sys.executable, str(ROOT / name), *args],
+        [sys.executable, str(ROOT / "scripts" / name), *args],
         cwd=ROOT, check=True, text=True,
         stdout=subprocess.PIPE, stderr=subprocess.PIPE,
     )
@@ -114,7 +114,7 @@ class CvatRoundTripTest(unittest.TestCase):
                 '</annotations>\n'
             )
             result = subprocess.run(
-                [sys.executable, str(ROOT / "import_cvat_signal_annotations.py"),
+                [sys.executable, str(ROOT / "scripts" / "import_cvat_signal_annotations.py"),
                  str(xml_path), "--dataset-root", str(root)],
                 cwd=ROOT, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             )

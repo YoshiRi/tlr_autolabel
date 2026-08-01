@@ -1,6 +1,6 @@
 import unittest
 
-from evaluate_signals import build_detection_records
+from tlr_autolabel.eval.signals import build_detection_records
 
 
 class EvaluateSignalRecordsTest(unittest.TestCase):

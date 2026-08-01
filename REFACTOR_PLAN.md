@@ -12,7 +12,7 @@ tests, then move implementation into a package with stable CLI wrappers.
 
 - Top-level files mix CLI entrypoints, reusable library code, configs, generated
   outputs, local previews, model artifacts, and build artifacts.
-- Large scripts such as `match_traffic_lights.py` and `tlr_autolabel.py` combine
+- Large scripts such as `scripts/match_traffic_lights.py` and `scripts/tlr_autolabel.py` combine
   argument parsing, orchestration, domain logic, I/O, and backend-specific code.
 - Pure logic (`state_tokens.py`, `temporal_association.py`) lives beside
   OpenCV/ONNX/TensorRT/ROS-dependent code.
@@ -83,7 +83,7 @@ Compatibility rule: keep existing top-level commands working during the
 transition. A current command such as:
 
 ```bash
-python3 match_traffic_lights.py --dataset-root <dataset>
+python3 scripts/match_traffic_lights.py --dataset-root <dataset>
 ```
 
 should keep working by delegating to the new package entrypoint.
@@ -151,14 +151,14 @@ Add tests around interfaces that are meant to be stable:
   - `tlr_autolabel/t4/traffic_light.py`
   - `tlr_autolabel/t4/adapters.py`
 - Keep CLI wrappers for:
-  - `to_object_ann.py`
-  - `export_object_ann_to_t4dataset.py`
-  - `export_re_to_t4dataset.py`
+  - `scripts/to_object_ann.py`
+  - `scripts/export_object_ann_to_t4dataset.py`
+  - `scripts/export_re_to_t4dataset.py`
 - Add golden tests for the generated annotation rows.
 
 ### 5. Split L3 Map Enrichment
 
-Refactor `match_traffic_lights.py` in smaller pieces:
+Refactor `scripts/match_traffic_lights.py` in smaller pieces:
 
 - lanelet2 parsing -> `tlr_autolabel/map/lanelet2.py`
 - frame/camera indexing -> `tlr_autolabel/t4/index.py`
@@ -173,7 +173,7 @@ map-missing behavior.
 
 ### 6. Split L1 Inference
 
-Refactor `tlr_autolabel.py` into:
+Refactor `scripts/tlr_autolabel.py` into:
 
 - detector backends:
   - ONNX YOLOX
@@ -301,8 +301,8 @@ Needed for real inference:
 
 - detector ONNX files
 - classifier ONNX files
-- `lamp_recognizer_ml.param.yaml`
-- `comlops_large_detector_ml.param.yaml` if using CoMLOps detector
+- `configs/model_params/lamp_recognizer_ml.param.yaml`
+- `configs/model_params/comlops_large_detector_ml.param.yaml` if using CoMLOps detector
 - environment variables:
   - `TLR_MODEL_ROOT`
   - `AUTOWARE_MLMODELS` when not using `/opt/autoware/mlmodels`
@@ -392,9 +392,9 @@ Branch / base:
   <branch> at <commit SHA>.
 
 Must preserve:
-  python3 tlr_autolabel.py ...
-  python3 match_traffic_lights.py --dataset-root <dataset>
-  python3 to_object_ann.py ...
+  python3 scripts/tlr_autolabel.py ...
+  python3 scripts/match_traffic_lights.py --dataset-root <dataset>
+  python3 scripts/to_object_ann.py ...
 
 Baseline:
   <test command>
@@ -433,10 +433,10 @@ Required source files:
 
 Optional small files:
 
-- `lamp_labels.txt`
-- `lamp_recognizer_ml.param.yaml`
-- `comlops_large_detector_ml.param.yaml`
-- `traffic_light_lamp_recognizer_comlops.onnx` if license and storage policy
+- `configs/model_params/lamp_labels.txt`
+- `configs/model_params/lamp_recognizer_ml.param.yaml`
+- `configs/model_params/comlops_large_detector_ml.param.yaml`
+- `models/traffic_light_lamp_recognizer_comlops.onnx` if license and storage policy
   allow sharing it
 
 Large or local-only files:
@@ -472,7 +472,7 @@ For real inference work, also confirm:
 ```bash
 echo "$TLR_MODEL_ROOT"
 echo "$AUTOWARE_MLMODELS"
-python3 tlr_autolabel.py --help
+python3 scripts/tlr_autolabel.py --help
 ```
 
 Do not start by running full dataset jobs or ROS2 parity jobs. First prove the
@@ -480,7 +480,29 @@ synthetic tests and CLI help still work after the move.
 
 ## Immediate Next Step
 
-Start with a small, non-invasive change:
+Phase 1.8 is now in progress on `refactor/phase1-8-review`:
+
+- top-level CLI entrypoints moved under `scripts/`
+- reusable review/eval logic moved under `tlr_autolabel.review` and
+  `tlr_autolabel.eval`
+- pure compatibility shims removed after callers were migrated to package paths
+- model params moved under `configs/model_params/`
+- tracked model artifact moved under `models/`
+- TensorRT helper source moved under `tools/`, binary output under ignored
+  `build/`
+
+Remaining refactor work after this phase:
+
+1. Move the L1 orchestration in `scripts/tlr_autolabel.py` behind a package
+   entrypoint, leaving only argument parsing in the script.
+2. Move the T4 conversion scripts into `tlr_autolabel.t4` modules with thin CLI
+   wrappers.
+3. Continue splitting `scripts/match_traffic_lights.py` until map loading,
+   projection, association, and report writing are independently reusable.
+4. Decide whether `data/` and `sample_preview/` should stay as local-only
+   ignored folders or become explicit fixture/artifact locations.
+
+The original first step for this plan was:
 
 1. Add the package skeleton.
 2. Add I/O contract tests for `traffic_light.json` using `primitive_id`.

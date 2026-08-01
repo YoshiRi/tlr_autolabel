@@ -22,6 +22,7 @@ import subprocess
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+REPO_ROOT = os.path.dirname(HERE)
 
 
 def sh(cmd, **kw):
@@ -30,7 +31,7 @@ def sh(cmd, **kw):
 
 
 def l1_runner():
-    wrapper = os.path.join(HERE, "run_gpu.sh")
+    wrapper = os.path.join(REPO_ROOT, "run_gpu.sh")
     if os.path.exists(wrapper):
         return [wrapper]
     return [sys.executable, os.path.join(HERE, "tlr_autolabel.py")]

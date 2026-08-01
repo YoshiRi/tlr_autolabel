@@ -14,8 +14,8 @@ evaluate the **actual Autoware ROS node pipeline** at three decoupled levels:
 **The node's output at each stage is converted to our canonical formats, then
 scored against GT with the same engine that scores the offline pipeline.** The
 evaluator is source-agnostic: "offline autolabel" and "ROS node" are just two
-runs; GT is shared. So we reuse L3 (`match_traffic_lights.py`) and L6
-(`evaluate_signals.py`) instead of writing node-specific metrics.
+runs; GT is shared. So we reuse L3 (`scripts/match_traffic_lights.py`) and L6
+(`scripts/evaluate_signals.py`) instead of writing node-specific metrics.
 
 ```
 ROS node graph ──topics──► collector ──► node run in tlr_autolabel/v1 (+ RE)
@@ -27,10 +27,10 @@ GT (reviewed A' + RE timeseries) ─────────────┤
 ```
 
 `ros2_pipeline/tlr_label_collector.py` already emits `tlr_autolabel/v1`, so a
-node run flows straight into `match_traffic_lights.py` -> A', exactly like an
+node run flows straight into `scripts/match_traffic_lights.py` -> A', exactly like an
 offline run. What's new is a **two-source evaluator** that joins a *prediction*
 run (node) to a *GT* run (reviewed offline) — the current
-`evaluate_signals.py` GT block lives inside one sidecar (review_status), which
+`scripts/evaluate_signals.py` GT block lives inside one sidecar (review_status), which
 is fine for "offline vs its own review" but not for "node vs GT".
 
 ## The three levels
@@ -54,18 +54,18 @@ match, per-label TP/FP/FN + confusion) — we align our temporal tolerance to it
 
 Flow:
 ```
-node bag ──bag_to_labels.py──► tlr_autolabel/v1 (roi box + classified state,
+node bag ──scripts/bag_to_labels.py──► tlr_autolabel/v1 (roi box + classified state,
    (TrafficLightRoiArray            time-aligned to GT keyframes, ±75ms)
     + TrafficLightArray)              │
-                                      ▼  match_traffic_lights.py
+                                      ▼  scripts/match_traffic_lights.py
                                  node A' sidecar
-                                      │  eval_vs_gt.py --gt <reviewed GT>
+                                      │  scripts/eval_vs_gt.py --gt <reviewed GT>
                                       ▼
                     detection P/R/IoU by distance (level 1) +
                     classification state accuracy + confusion (level 2)
 ```
 
-- `bag_to_labels.py` (built 2026-07-22): reads `*/detection/rois`
+- `scripts/bag_to_labels.py` (built 2026-07-22): reads `*/detection/rois`
   (TrafficLightRoiArray) + `*/classification/traffic_signals`
   (TrafficLightArray), joins roi<->signal by `traffic_light_id` per stamp, maps
   `TrafficLightElement` enums to canonical tokens (validated:
@@ -100,11 +100,11 @@ The Autoware classifier takes `rois` as input, so we can run it two ways:
 Reuse:
 - `ros2_pipeline/` feeder + collector (node output → `tlr_autolabel/v1`) and
   `parity_check.py` (node vs offline boxes/states).
-- `match_traffic_lights.py` (node run -> A', map association) and
-  `evaluate_signals.py` ledgers/profiles.
+- `scripts/match_traffic_lights.py` (node run -> A', map association) and
+  `scripts/evaluate_signals.py` ledgers/profiles.
 
 New:
-- **two-source evaluator** `eval_vs_gt.py` (implemented 2026-07-22): prediction
+- **two-source evaluator** `scripts/eval_vs_gt.py` (implemented 2026-07-22): prediction
   run × GT run → detection P/R/IoU by distance (level 1), state accuracy +
   element P/R + confusion (level 2); RE level is the remaining extension. Falls
   back to non-rejected-as-GT with a warning when GT is unreviewed (machinery
@@ -132,7 +132,7 @@ the bag-driven run we align node output to the nearest GT keyframe timestamp.
 ## Phasing
 
 1. **Phase 1 (now, provisional GT)**: detector-driven harness → node A' sidecar →
-   `eval_vs_gt.py` for detection P/R + classification accuracy. Validate the
+   `scripts/eval_vs_gt.py` for detection P/R + classification accuracy. Validate the
    machinery against provisional GT and existing parity_check.
 2. **Phase 2**: classifier-isolated (GT-ROI feeder) → pure classification
    accuracy + confusion matrix.

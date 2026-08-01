@@ -1,13 +1,13 @@
 // Minimal TensorRT engine runner for the tlr_autolabel scripts.
 //
-//   one-shot: ./trt_run <engine> <input.f32> <output.f32>
-//   serve   : ./trt_run <engine> serve
+//   one-shot: build/trt_run <engine> <input.f32> <output.f32>
+//   serve   : build/trt_run <engine> serve
 //     prints "INPUT d0 d1 ..." / "OUTPUT d0 d1 ..." / "READY" on stdout, then
 //     reads "<in.f32> <out.f32>" lines from stdin, answering "DONE" (or "ERR")
 //     per line. Keeps the engine deserialized between calls, which matters:
 //     deserialization takes ~1-2 s while one inference is ~10 ms.
 //
-// Build: g++ -O2 trt_run.cpp -o trt_run -I/usr/local/cuda/include \
+// Build: g++ -O2 tools/trt_run.cpp -o build/trt_run -I/usr/local/cuda/include \
 //        -L/usr/local/cuda/lib64 -lnvinfer -lcudart
 #include <NvInfer.h>
 #include <cuda_runtime_api.h>

@@ -33,13 +33,25 @@ lanelet2 traffic-light IDs.
 
 | layer | role | input -> output | where |
 |-------|------|-----------------|-------|
-| **L1 inference** | detect + classify signals on an image directory | images -> Tier A (`tlr_autolabel/v1` per-frame JSON) | `tlr_autolabel.py` |
-| **L2 standardize (A→B)** | convert autolabel to standard t4dataset annotation: bbox + db_tlr `category` + `occlusion`/`truncation` attributes + 2D `instance`; map-signal identity belongs to t4devkit-defined `traffic_light.json` for B' | Tier A (or A') -> Tier B (`object_ann.json` + `category`/`attribute`/`instance`) [+ `traffic_light.json` for B'] | `to_object_ann.py` |
-| **L3 map enrichment (A→A')** | map association (lanelet2 way + RE group) + multi-camera/head fusion; an **internal** enrichment used for review/QA and to fill B' | Tier A + T4 map -> Tier A' (`traffic_signal_2d/v2` sidecar) + `traffic_signal_re/v1` | `match_traffic_lights.py`, `aggregate_regulatory_signals.py`, `render_re_timeline.py` |
-| **L4 review UI** | human correction that turns provisional A' into reviewed GT: per-frame box / state / visibility / map id (CVAT), and RE state-intervals (timeline); reviewed A' can then be standardized to B/B' | Tier A' -> reviewed A' -> Tier B/B' | CVAT pair (`export_cvat_signal_task.py`/`import_cvat_signal_annotations.py`, `docs/cvat_interop.md`) + RE review (`make_re_review_template.py`, `render_re_review_timeline.py`, `apply_re_review.py`, `docs/re_timeline_review.md`) |
+| **L1 inference** | detect + classify signals on an image directory | images -> Tier A (`tlr_autolabel/v1` per-frame JSON) | `scripts/tlr_autolabel.py` |
+| **L2 standardize (A→B)** | convert autolabel to standard t4dataset annotation: bbox + db_tlr `category` + `occlusion`/`truncation` attributes + 2D `instance`; map-signal identity belongs to t4devkit-defined `traffic_light.json` for B' | Tier A (or A') -> Tier B (`object_ann.json` + `category`/`attribute`/`instance`) [+ `traffic_light.json` for B'] | `scripts/to_object_ann.py` |
+| **L3 map enrichment (A→A')** | map association (lanelet2 way + RE group) + multi-camera/head fusion; an **internal** enrichment used for review/QA and to fill B' | Tier A + T4 map -> Tier A' (`traffic_signal_2d/v2` sidecar) + `traffic_signal_re/v1` | `scripts/match_traffic_lights.py`, `scripts/aggregate_regulatory_signals.py`, `scripts/render_re_timeline.py` |
+| **L4 review UI** | human correction that turns provisional A' into reviewed GT: per-frame box / state / visibility / map id (CVAT), and RE state-intervals (timeline); reviewed A' can then be standardized to B/B' | Tier A' -> reviewed A' -> Tier B/B' | CVAT pair (`scripts/export_cvat_signal_task.py`/`scripts/import_cvat_signal_annotations.py`, `docs/cvat_interop.md`) + RE review (`scripts/make_re_review_template.py`, `scripts/render_re_review_timeline.py`, `scripts/apply_re_review.py`, `docs/re_timeline_review.md`) |
 | _(downstream)_ | AWML info / Deepen / CVAT / COCO / DLR **from** standard t4dataset annotation | Tier B/B' -> external formats | **existing t4devkit / webauto tooling — not maintained here** |
-| **L5 ros2 verification** | score the live Autoware node against our GT (detection + classification) | node rosbag -> `tlr_autolabel/v1` -> eval | `ros2_pipeline/`, `bag_to_labels.py`, `docs/eval_design.md` |
-| **L6 evaluation** | metrics vs GT: detection P/R/IoU + classification accuracy + confusion (two-source), plus the ledger profiles; RE level via driving_log_replayer_v2 | pred + GT -> `tlr_eval*` reports | `eval_vs_gt.py`, `evaluate_signals.py` |
+| **L5 ros2 verification** | score the live Autoware node against our GT (detection + classification) | node rosbag -> `tlr_autolabel/v1` -> eval | `ros2_pipeline/`, `scripts/bag_to_labels.py`, `docs/eval_design.md` |
+| **L6 evaluation** | metrics vs GT: detection P/R/IoU + classification accuracy + confusion (two-source), plus the ledger profiles; RE level via driving_log_replayer_v2 | pred + GT -> `tlr_eval*` reports | `scripts/eval_vs_gt.py`, `scripts/evaluate_signals.py` |
+
+## Repository layout
+
+- `tlr_autolabel/`: reusable Python package split by domain (`core`,
+  `inference`, `map`, `tracking`, `t4`, `review`, `eval`).
+- `scripts/`: command-line entrypoints. Use `python3 scripts/<tool>.py ...`.
+- `configs/`: detector presets, state vocabularies, model parameter YAMLs, and
+  tracking profiles.
+- `models/`: small checked-in model artifacts used as defaults or debug aids.
+- `tools/`: non-Python helper sources such as the TensorRT runner.
+- `data/` and `sample_preview/`: local ignored artifacts for smoke/manual
+  inspection, not canonical source.
 
 Design rules:
 
@@ -103,7 +115,7 @@ for B' only, `traffic_light.json`. Files named `traffic_signal_*` and
 > `truncation_state` defaults to non-truncated until a reviewer sets it.
 
 > **Transitional (standardization in progress, 2026-07-23):** `export_awml.py`
-> and `export_labels.py` (COCO) are **superseded** by L2 (`to_object_ann.py`) +
+> and `export_labels.py` (COCO) are **superseded** by L2 (`scripts/to_object_ann.py`) +
 > external tooling and will be deprecated; the CVAT pair stays as the review UI
 > for now. `traffic_signal_2d/v2` is the L3 internal form (A'), no longer the
 > delivered "Tier B".
@@ -130,7 +142,7 @@ model path + recommended thresholds + tiles default; the preset name is
 recorded in `meta.preset`, so a run is reproducible from one word:
 
 ```bash
-python3 tlr_autolabel.py <dir> --preset yolox-1920-int8 --out-dir ./labels
+python3 scripts/tlr_autolabel.py <dir> --preset yolox-1920-int8 --out-dir ./labels
 # available: yolox-1920-int8 (recommended), yolox-1280-int8, yolox-960-int8,
 #            comlops-large, autoware-mlmodels-960-onnx
 ```
@@ -178,7 +190,7 @@ plain single-pass configuration (tiles OFF by default — tiles are opt-in via
 presets or `--tiles`), so a quick eyeball run is:
 
 ```bash
-python3 tlr_autolabel.py <a_few_images> --detector new_model.onnx --viz --out-dir ./try
+python3 scripts/tlr_autolabel.py <a_few_images> --detector new_model.onnx --viz --out-dir ./try
 ```
 
 Flexibility contract (what happens when model specs change):
@@ -194,7 +206,7 @@ Flexibility contract (what happens when model specs change):
 - **Presets** may use `$ENV_VARS` and `~` in paths; a missing model path fails
   fast, naming the preset it came from.
 - Per-model decode constants never live in code: yolox needs none, CoMLOps
-  reads `comlops_large_detector_ml.param.yaml` (`--comlops-param`).
+  reads `configs/model_params/comlops_large_detector_ml.param.yaml` (`--comlops-param`).
 - The **classifier** is swappable the same way (`--classifier` /
   `--classifier-param`); a different classifier architecture needs its decode
   added alongside the LampRecognizer one.
@@ -276,11 +288,11 @@ full image ──> tlr_detector_onnx.py ──> ROI crops ──> tlr_lamp_recog
               (YOLOX detector)                        (YOLOX-based classifier = LampRecognizer)
 ```
 
-`tlr_autolabel.py` runs the whole chain (detector -> per-ROI classifier) and
+`scripts/tlr_autolabel.py` runs the whole chain (detector -> per-ROI classifier) and
 writes per-image JSON (+ optional annotated `--viz` PNG).
 
 ```bash
-python3 tlr_autolabel.py <image_or_dir> --out-dir ./labels [--viz] [--drop-unknown]
+python3 scripts/tlr_autolabel.py <image_or_dir> --out-dir ./labels [--viz] [--drop-unknown]
 ```
 
 ### GPU (recommended — ~15-30x faster)
@@ -311,7 +323,7 @@ required because the system CUDA 12.8 install is missing `libcufft.so.11`.
 `--detector` accepts two model families; the type is auto-detected from the ONNX
 output count (1 output = YOLOX, 3 outputs = CoMLOps darknet). For YOLOX it also
 accepts the TensorRT int8 `.engine` (run on GPU via the `trt_run` helper,
-compiled from `trt_run.cpp` on first use).
+compiled from `tools/trt_run.cpp` on first use).
 
 **Prefer the int8 `.engine` over the fp32 `.onnx` for the YOLOX detectors.**
 The fp32 ONNX fires high-confidence (0.9+) false positives on motion-blurred
@@ -323,20 +335,20 @@ frame 00000 are identical (scores slightly lower at int8, e.g. 0.99 -> 0.93).
 
 ```bash
 # YOLOX traffic_light detector (any input size; 960/1280/1920x1280 variants)
-python3 tlr_autolabel.py <dir> --detector \
+python3 scripts/tlr_autolabel.py <dir> --detector \
   /home/yoshiri/autoware_data/traffic_light_detector_testL/yolox-sPlus-opt-Co_MLOps-traffic_light-1920x1280_20260706_best.onnx
 
 # same model, int8 TensorRT engine (recommended: no blur/texture FPs, ~100x faster)
-python3 tlr_autolabel.py <dir> --detector \
+python3 scripts/tlr_autolabel.py <dir> --detector \
   /home/yoshiri/autoware_data/traffic_light_detector_testL/yolox-sPlus-opt-Co_MLOps-traffic_light-1920x1280_20260706_best.engine
 
 # CoMLOps-Large-Detection-Model as detector (general 10-class model; only
 # TRAFFIC_LIGHT detections are kept by default, see --det-classes)
-python3 tlr_autolabel.py <dir> --detector \
+python3 scripts/tlr_autolabel.py <dir> --detector \
   /home/yoshiri/autoware_data/traffic_light_classifier/CoMLOps-Large-Detection-Model-v1.0.1.onnx --det-score-thr 0.3
 ```
 
-CoMLOps decode params live in `comlops_large_detector_ml.param.yaml`. No official
+CoMLOps decode params live in `configs/model_params/comlops_large_detector_ml.param.yaml`. No official
 param file exists for that model; layout and preprocessing were reverse-engineered
 (5 anchors x `[tx,ty,tw,th,obj,10cls]` per scale at strides 8/16/32, all sigmoid;
 RGB + /255 letterbox — note this differs from YOLOX's raw-BGR) and the anchors
@@ -465,26 +477,27 @@ confidence), so `state` is always re-derivable. Files written before
 2026-07-18 used a `signal` key with confidence-ordered `green-arrow(up)`
 tokens; the exporter still reads them as a fallback.
 
-### Exporting labels (COCO / CVAT)
+### Legacy COCO / CVAT export
 
 The per-image JSON written by `--out-dir` is the source of truth (keeps xyxy
 boxes, detector score, per-lamp color/shape/arrow + confidences — more than
-either interchange format holds natively). `export_labels.py` converts a
-directory of them, so the annotation-tool choice stays reversible:
+either interchange format holds natively). The old COCO/CVAT/AWML helpers are
+kept under `deprecated/` for reference. Maintained dataset conversion now goes
+through standard t4 `object_ann.json` via `scripts/to_object_ann.py`.
 
 ```bash
 # COCO: single labels.json; state + lamps kept in each annotation's "attributes"
-python3 export_labels.py <labels_dir> --format coco --out labels_coco.json \
+python3 deprecated/export_labels.py <labels_dir> --format coco --out labels_coco.json \
     --image-root <dataset_dir> [--category-mode single|state]
 
 # CVAT for images 1.1 XML; state/confidence as CVAT box attributes
-python3 export_labels.py <labels_dir> --format cvat --out annotations.xml \
+python3 deprecated/export_labels.py <labels_dir> --format cvat --out annotations.xml \
     --image-root <dataset_dir>
 
 # AWML adapter: derived T4 training dataset (symlinked view + generated
 # object_ann.json/category.json with db_tlr state categories; see the AWML
 # section above). Labels must carry sample_data_token (L1 run with --t4-dataset).
-python3 export_awml.py <labels_dir> --t4-dataset <src_dataset> --out <derived_dir>
+python3 deprecated/export_awml.py <labels_dir> --t4-dataset <src_dataset> --out <derived_dir>
 ```
 
 - `--image-root` makes image names relative (use the dataset root so paths match
@@ -499,14 +512,14 @@ python3 export_awml.py <labels_dir> --t4-dataset <src_dataset> --out <derived_di
 
 Three tools take a T4 dataset from raw autolabels to a reviewed regulatory-
 element timeline (ported from the dataset-side `tools/` on 2026-07-19; token
-parsing unified on the canonical vocabulary via `state_tokens.py`, with legacy
+parsing unified on the canonical vocabulary via `tlr_autolabel.core.state_tokens`, with legacy
 paren-style fallback):
 
 One command runs everything over one or more datasets (L1 per camera channel
 with `--skip-existing` resume, then the three stages below):
 
 ```bash
-python3 run_dataset.py <dataset_root> [...] --preset yolox-1920-int8 [--run-id ID]
+python3 scripts/run_dataset.py <dataset_root> [...] --preset yolox-1920-int8 [--run-id ID]
 ```
 
 Or stage by stage:
@@ -516,27 +529,27 @@ Or stage by stage:
 #    on projected boxes) and resolve regulatory elements -> A' sidecar.
 #    v1 labels are looked up by sample_data_token (file naming irrelevant);
 #    both flat CHANNEL_frame.json dirs and per-channel subdirs are accepted.
-python3 match_traffic_lights.py --dataset-root <dataset>
+python3 scripts/match_traffic_lights.py --dataset-root <dataset>
 
 # Optional: recover weak real detections with temporal tracking. Run L1 with
 # --det-low-score-thr first if you need candidates below the normal L1 threshold.
-python3 match_traffic_lights.py --dataset-root <dataset> \
+python3 scripts/match_traffic_lights.py --dataset-root <dataset> \
     --temporal-tracking \
     --tracking-config configs/tracking/bytetrack-lite.yaml
 
 # 2) fuse across cameras and heads with map-bulb feasibility weighting ->
 #    annotation/traffic_signal_re_timeseries.json (traffic_signal_re/v1)
 #    + build/tl_match/re_verification_report.json (flags for review)
-python3 aggregate_regulatory_signals.py --dataset-root <dataset>
+python3 scripts/aggregate_regulatory_signals.py --dataset-root <dataset>
 
 # 3) interactive HTML timeline (one row per head group, flags marked)
-python3 render_re_timeline.py --dataset-root <dataset>
+python3 scripts/render_re_timeline.py --dataset-root <dataset>
 
 # 4) optional richer state review: edit state by physical signal group/time.
 #    The HTML also writes crop candidates under build/tl_match/re_review_assets/.
-python3 render_re_review_timeline.py --dataset-root <dataset>
-python3 make_re_review_template.py --dataset-root <dataset>
-python3 apply_re_review.py --dataset-root <dataset> \
+python3 scripts/render_re_review_timeline.py --dataset-root <dataset>
+python3 scripts/make_re_review_template.py --dataset-root <dataset>
+python3 scripts/apply_re_review.py --dataset-root <dataset> \
     --review annotation/traffic_signal_re_review.json \
     --output annotation/traffic_signal_2d_ann.reviewed.json
 ```
@@ -617,7 +630,7 @@ Fusion repair policies (decided 2026-07-19):
 
 ### A' sidecar schema: `traffic_signal_2d/v2` (per-detection)
 
-Written by `match_traffic_lights.py` to `annotation/traffic_signal_2d_ann.json`.
+Written by `scripts/match_traffic_lights.py` to `annotation/traffic_signal_2d_ann.json`.
 This is the internal map-enriched IF the L4 review tools consume. Delivered
 Tier B/B' remains standard t4dataset annotation: `object_ann.json` for 2D boxes,
 and `traffic_light.json` for the 2D instance -> map linestring relation when B'
@@ -665,7 +678,7 @@ per-frame `frames` diagnostics — projected candidates, IoU, distances).
 
 ### `traffic_signal_re/v1` (regulatory-element time series)
 
-Written by `aggregate_regulatory_signals.py` to
+Written by `scripts/aggregate_regulatory_signals.py` to
 `annotation/traffic_signal_re_timeseries.json`:
 
 ```jsonc
@@ -698,8 +711,8 @@ Written by `aggregate_regulatory_signals.py` to
 
 ### `traffic_signal_re_review/v1` (editable state review)
 
-Written by `make_re_review_template.py` or exported from
-`render_re_review_timeline.py`, then applied by `apply_re_review.py`. This file
+Written by `scripts/make_re_review_template.py` or exported from
+`scripts/render_re_review_timeline.py`, then applied by `scripts/apply_re_review.py`. This file
 is intentionally a sidecar: it records human decisions over physical signal
 groups and time intervals without overwriting the CVAT/A' geometry edits.
 
@@ -744,11 +757,11 @@ Application rules:
 
 The normal human loop is: CVAT first for bbox/visibility/reject/map-id fixes,
 then re-run aggregation, then RE timeline review for state intervals, then
-`apply_re_review.py` to produce the reviewed A' sidecar consumed by L6.
+`scripts/apply_re_review.py` to produce the reviewed A' sidecar consumed by L6.
 
 ### object_ann-based annotation -> t4dataset B/B'
 
-`export_object_ann_to_t4dataset.py` normalizes existing object_ann-based
+`scripts/export_object_ann_to_t4dataset.py` normalizes existing object_ann-based
 annotation into the current B/B' IF without re-running Autolabel. It preserves
 `object_ann.json` rows, consumes deprecated
 `traffic_light_map_association.json` when present, and writes t4devkit-defined
@@ -760,14 +773,14 @@ splits only those image instances deterministically before writing
 The deprecated association file is not written to the derived output.
 
 ```bash
-python3 export_object_ann_to_t4dataset.py \
+python3 scripts/export_object_ann_to_t4dataset.py \
   --dataset-root <dataset> \
   --out /tmp/object_ann_to_t4_out
 ```
 
 ### RE-based annotation -> t4dataset B/B'
 
-`export_re_to_t4dataset.py` is a reusable adapter for RE-based annotation data.
+`scripts/export_re_to_t4dataset.py` is a reusable adapter for RE-based annotation data.
 It applies `traffic_signal_re_review/v1` decisions, or derives decisions from
 `traffic_signal_re/v1`, onto the 2D geometry/map sidecar and then runs the L2
 converter. The output is standard t4dataset B/B': `object_ann.json`,
@@ -775,13 +788,13 @@ converter. The output is standard t4dataset B/B': `object_ann.json`,
 when map relations exist.
 
 ```bash
-python3 export_re_to_t4dataset.py \
+python3 scripts/export_re_to_t4dataset.py \
   --dataset-root <dataset> \
   --review annotation/traffic_signal_re_review.json \
   --out /tmp/re_to_t4_out
 
 # To intentionally promote an unchecked template as annotation data:
-python3 export_re_to_t4dataset.py \
+python3 scripts/export_re_to_t4dataset.py \
   --dataset-root <dataset> \
   --review annotation/traffic_signal_re_review.template.json \
   --unchecked-as accepted \
@@ -796,7 +809,7 @@ Some evaluator datasets are nuScenes/T4-derived 2D GT only: state is encoded as
 Use the L1-vs-T4 evaluator for those datasets:
 
 ```bash
-python3 eval_l1_vs_t4_gt.py \
+python3 scripts/eval_l1_vs_t4_gt.py \
   --dataset-root <dataset_root> \
   --pred-dir <dataset_root>/tlr_autolabel/<CHANNEL> \
   --iou 0.3
@@ -846,18 +859,18 @@ bottom/right image edge).
 
 ## Scripts
 
-### `tlr_detector_onnx.py`
+### `scripts/tlr_detector_onnx.py`
 YOLOX traffic-light **detector** (`yolox-sPlus-opt-Co_MLOps-traffic_light-*`).
 Decodes the (num_grids, 6) output — `4 box + 1 obj + 1 class`, `num_class=1`.
 Grid/stride decode matches `tensorrt_yolox` detector node. Edit the paths at the
 top; detector input size must match the model (960 or 1280).
 
-### `tlr_lamp_recognizer_onnx.py`
+### `scripts/tlr_lamp_recognizer_onnx.py`
 YOLOX-based **classifier**, reproducing `autoware_traffic_light_classifier`
 node with `classifier_type=2` (LampRecognizer):
 `.../autoware_traffic_light_classifier/src/classifier/cnn_lamp_recognizer.cpp`
 
-- model: `traffic_light_lamp_recognizer_comlops.onnx` — input `(N,3,256,256)`,
+- model: `models/traffic_light_lamp_recognizer_comlops.onnx` — input `(N,3,256,256)`,
   output `(N,48,64,64)` = `(N, num_anchors*chans_per_anchor, gh, gw)`
 - preprocess: `blobFromImage(scale=1/255, swapRB=False)` (BGR kept, no mean/std)
 - decode: anchor-based (YOLOv4-style) — `bx = x + scale_x_y*tx - bbox_offset`,
@@ -867,15 +880,15 @@ node with `classifier_type=2` (LampRecognizer):
 - NMS (IoU) identical to `runNms()`
 
 ```bash
-python3 tlr_lamp_recognizer_onnx.py <crop_or_dir> [--score-thr 0.2] [--nms-thr 0.2]
+python3 scripts/tlr_lamp_recognizer_onnx.py <crop_or_dir> [--score-thr 0.2] [--nms-thr 0.2]
 ```
 
 ## Assets in this dir
-- `traffic_light_lamp_recognizer_comlops.onnx` (from autoware_data / model zoo v4)
-- `lamp_recognizer_ml.param.yaml` — model_params (anchors, indices, scale_x_y).
+- `models/traffic_light_lamp_recognizer_comlops.onnx` (from autoware_data / model zoo v4)
+- `configs/model_params/lamp_recognizer_ml.param.yaml` — model_params (anchors, indices, scale_x_y).
   Canonical source:
   `https://awf.ml.dev.web.auto/perception/models/traffic_light_classifier/v4/lamp_recognizer_ml.param.yaml`
-- `lamp_labels.txt` — full-signal combo labels (reference only; the decoder emits
+- `configs/model_params/lamp_labels.txt` — full-signal combo labels (reference only; the decoder emits
   per-lamp color+shape, not these combos)
 
 ## Provenance

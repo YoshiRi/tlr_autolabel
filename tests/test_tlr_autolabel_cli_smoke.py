@@ -22,7 +22,7 @@ def _load_tlr_autolabel_script():
     # REFACTOR_PLAN.md) share a name; the package always wins a plain
     # `import tlr_autolabel`, so load the script by explicit path instead.
     spec = importlib.util.spec_from_file_location(
-        "_tlr_autolabel_script_smoke", ROOT / "tlr_autolabel.py")
+        "_tlr_autolabel_script_smoke", ROOT / "scripts" / "tlr_autolabel.py")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
@@ -73,7 +73,7 @@ class TlrAutolabelCliSmokeTest(unittest.TestCase):
         module.LampClassifier = FakeClassifier
 
         argv = [
-            "tlr_autolabel.py", str(image_dir),
+            "scripts/tlr_autolabel.py", str(image_dir),
             "--detector", str(dummy_detector),
             "--classifier", str(dummy_classifier),
             "--classifier-param", str(dummy_classifier_param),

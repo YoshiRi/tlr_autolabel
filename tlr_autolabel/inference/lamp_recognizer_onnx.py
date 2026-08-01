@@ -8,7 +8,7 @@ Faithfully reproduces the decode of Autoware's `autoware_traffic_light_classifie
 node, classifier_type=2 (LampRecognizer):
   src/universe/.../autoware_traffic_light_classifier/src/classifier/cnn_lamp_recognizer.cpp
 
-Model  : traffic_light_lamp_recognizer_comlops.onnx
+Model  : models/traffic_light_lamp_recognizer_comlops.onnx
   input : (N, 3, 256, 256), preprocessing = blobFromImages(scale=1/255, swapRB=false)
   output: (N, 48, 64, 64) == (N, num_anchors*chans_per_anchor, grid_h, grid_w)
 
@@ -18,13 +18,14 @@ for autolabeling / debugging, printing per-lamp color + shape + arrow direction.
 
 Usage:
   python3 tlr_lamp_recognizer_onnx.py <image_or_dir> \
-      [--model PATH.onnx] [--param lamp_recognizer_ml.param.yaml] \
+      [--model PATH.onnx] [--param configs/model_params/lamp_recognizer_ml.param.yaml] \
       [--score-thr 0.2] [--nms-thr 0.2]
 """
 import argparse
 import glob
 import math
 import os
+from pathlib import Path
 
 import cv2
 import numpy as np
@@ -189,11 +190,11 @@ def run_one(sess, in_name, out_name, img_path, mp, input_w, input_h, score_thr, 
 
 
 def main():
-    here = os.path.dirname(os.path.abspath(__file__))
+    repo_root = Path(__file__).resolve().parents[2]
     ap = argparse.ArgumentParser()
     ap.add_argument("image", help="image file or directory of crops")
-    ap.add_argument("--model", default=os.path.join(here, "traffic_light_lamp_recognizer_comlops.onnx"))
-    ap.add_argument("--param", default=os.path.join(here, "lamp_recognizer_ml.param.yaml"))
+    ap.add_argument("--model", default=str(repo_root / "models/traffic_light_lamp_recognizer_comlops.onnx"))
+    ap.add_argument("--param", default=str(repo_root / "configs/model_params/lamp_recognizer_ml.param.yaml"))
     ap.add_argument("--score-thr", type=float, default=0.2)
     ap.add_argument("--nms-thr", type=float, default=0.2)
     args = ap.parse_args()

@@ -9,22 +9,24 @@ from pathlib import Path
 
 import numpy as np
 
-# repo root: tlr_autolabel/inference/trt.py -> tlr_autolabel/ -> repo root,
-# where trt_run.cpp and the compiled trt_run binary live.
+# repo root: tlr_autolabel/inference/trt.py -> tlr_autolabel/ -> repo root.
 REPO_ROOT = Path(__file__).resolve().parents[2]
+TRT_RUN_SOURCE = REPO_ROOT / "tools" / "trt_run.cpp"
+TRT_RUN_BINARY = REPO_ROOT / "build" / "trt_run"
 
 
 class TrtServer:
     """Runs a TensorRT .engine through the trt_run helper (serve mode keeps the
     engine deserialized across images). Single input / single output engines
-    only. Compiled from trt_run.cpp on first use."""
+    only. Compiled from tools/trt_run.cpp on first use."""
 
     def __init__(self, engine_path):
-        binary = os.path.join(REPO_ROOT, "trt_run")
+        binary = str(TRT_RUN_BINARY)
         if not os.path.exists(binary):
+            TRT_RUN_BINARY.parent.mkdir(parents=True, exist_ok=True)
             cuda = os.environ.get("CUDA_HOME", "/usr/local/cuda")
             subprocess.check_call(
-                ["g++", "-O2", os.path.join(REPO_ROOT, "trt_run.cpp"), "-o", binary,
+                ["g++", "-O2", str(TRT_RUN_SOURCE), "-o", binary,
                  f"-I{cuda}/include", f"-L{cuda}/lib64",
                  "-lnvinfer", "-lcudart"])
         self.proc = subprocess.Popen([binary, engine_path, "serve"],

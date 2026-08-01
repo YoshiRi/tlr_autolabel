@@ -24,8 +24,10 @@ import sys
 import tempfile
 from pathlib import Path
 
-from apply_re_review import apply_review, normalize_decisions, timestamps_by_sample
-from make_re_review_template import build_template
+import _bootstrap  # noqa: F401
+
+from tlr_autolabel.review.re_apply import apply_review, normalize_decisions, timestamps_by_sample
+from tlr_autolabel.review.re_template import build_template
 
 HERE = Path(__file__).resolve().parent
 APPLY_STATUSES = {"accepted", "fixed", "rejected"}

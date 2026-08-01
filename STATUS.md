@@ -61,11 +61,11 @@
 | L2 COCO / CVAT 出力 | G4 | works-here | ○ |
 | L2 AWML 派生データセット | G4 | experimental | △ 互換手段。実 create_data で未検証(PLAN 3, 優先度低) |
 | L4 deepen 変換 | G4 | experimental | △ 契約表のみ・変換は他リポジトリ・未検証 |
-| L6 評価(GTフリー指標: 距離別プロファイル/時間安定性) | G1 | experimental | △ evaluate_signals.py。`eval_detections.jsonl`はtracking source列(`source_type`/`temporal_source`/`track_id`)も保持 |
-| L6 評価(GT指標: 精度/PR、confusion) | G1 | **works-here** | ○ 実GT(ad266d7c 人手object_ann 518箱)でL1初測定: 検出P0.58/R0.85、状態精度0.78。`eval_vs_gt.py` |
-| A→B 標準t4変換(object_ann) | G4→core | works-here | ○ `to_object_ann.py`。AWML/COCO/Deepen/CVATは既存ツール委譲。自作exporterはdeprecated |
+| L6 評価(GTフリー指標: 距離別プロファイル/時間安定性) | G1 | experimental | △ `scripts/evaluate_signals.py`。`eval_detections.jsonl`はtracking source列(`source_type`/`temporal_source`/`track_id`)も保持 |
+| L6 評価(GT指標: 精度/PR、confusion) | G1 | **works-here** | ○ 実GT(ad266d7c 人手object_ann 518箱)でL1初測定: 検出P0.58/R0.85、状態精度0.78。`scripts/eval_vs_gt.py` |
+| A→B 標準t4変換(object_ann) | G4→core | works-here | ○ `scripts/to_object_ann.py`。AWML/COCO/Deepen/CVATは既存ツール委譲。自作exporterはdeprecated |
 | L5 ros2 パリティ検証 | G6 | not-started | ✗ 隔離中。受入=launch int8 と一致 |
-| 一括実行(run_dataset.py) | G2/G5 | works-here | ○ 複数データセット・チャンネル自動発見 |
+| 一括実行(`scripts/run_dataset.py`) | G2/G5 | works-here | ○ 複数データセット・チャンネル自動発見 |
 | パス/依存の抽象化(TLR_MODEL_ROOT, requirements) | G5 | reproducible | ○ |
 | モデル管理(hash検証/engineキャッシュ/取得) | G5 | not-started | ✗ backlog(PLAN 9) |
 

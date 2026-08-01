@@ -16,4 +16,4 @@ NV="$(echo "$VENV"/lib/python*/site-packages/nvidia)"
 # make onnxruntime-gpu find libcufft/cublas/cudnn/... shipped by the nvidia wheels
 export LD_LIBRARY_PATH="$(ls -d "$NV"/*/lib 2>/dev/null | tr '\n' ':')${LD_LIBRARY_PATH:-}"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-exec "$VENV/bin/python" "$HERE/tlr_autolabel.py" "$@"
+exec "$VENV/bin/python" "$HERE/scripts/tlr_autolabel.py" "$@"

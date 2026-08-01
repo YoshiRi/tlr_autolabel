@@ -39,8 +39,8 @@ PY=python3
 
 if [ "${REFRESH:-0}" = "1" ]; then
   echo ">> refreshing Tier B sidecar + RE report"
-  "$PY" "$HERE/match_traffic_lights.py" --dataset-root "$DS"
-  "$PY" "$HERE/aggregate_regulatory_signals.py" --dataset-root "$DS"
+  "$PY" "$HERE/scripts/match_traffic_lights.py" --dataset-root "$DS"
+  "$PY" "$HERE/scripts/aggregate_regulatory_signals.py" --dataset-root "$DS"
 fi
 
 # cameras: args, or every data/CAM_* dir with jpgs
@@ -59,7 +59,7 @@ EXTRA=()
 
 echo ">> exporting CVAT tasks for: ${CAMERAS[*]}"
 for cam in "${CAMERAS[@]}"; do
-  "$PY" "$HERE/export_cvat_signal_task.py" --dataset-root "$DS" \
+  "$PY" "$HERE/scripts/export_cvat_signal_task.py" --dataset-root "$DS" \
     --camera "$cam" --count 0 "${EXTRA[@]}"
 done
 

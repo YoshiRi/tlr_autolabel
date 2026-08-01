@@ -9,7 +9,7 @@ import numpy as np
 # tlr_autolabel/ package (see REFACTOR_PLAN.md) share a name, and the package
 # always wins a plain `import tlr_autolabel` in this repo layout.
 _spec = importlib.util.spec_from_file_location(
-    "_tlr_autolabel_script", Path(__file__).resolve().parents[1] / "tlr_autolabel.py")
+    "_tlr_autolabel_script", Path(__file__).resolve().parents[1] / "scripts/tlr_autolabel.py")
 _tlr_autolabel_script = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_tlr_autolabel_script)
 process_image_with_candidates = _tlr_autolabel_script.process_image_with_candidates

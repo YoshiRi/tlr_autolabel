@@ -21,7 +21,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from xml.etree import ElementTree as ET
 
-from state_tokens import CANON_RE, LEGACY_RE, elements_key, parse_state
+from tlr_autolabel.core.state_tokens import CANON_RE, LEGACY_RE, elements_key, parse_state
 from tlr_autolabel.core.io import load_json
 
 SIGNAL_LABELS = {"traffic_light"}

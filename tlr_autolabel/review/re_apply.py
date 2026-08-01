@@ -15,7 +15,7 @@ from collections import Counter, defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 
-from state_tokens import CANON_RE, LEGACY_RE, elements_key, parse_state
+from tlr_autolabel.core.state_tokens import CANON_RE, LEGACY_RE, elements_key, parse_state
 from tlr_autolabel.core.io import load_json
 
 VALID_REVIEW_STATUS = {"unchecked", "accepted", "rejected", "fixed"}

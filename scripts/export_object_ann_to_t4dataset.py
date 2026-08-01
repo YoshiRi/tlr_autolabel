@@ -22,6 +22,8 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
+import _bootstrap  # noqa: F401
+
 from tlr_autolabel.t4.adapters import (
     association_map,
     build_traffic_light,

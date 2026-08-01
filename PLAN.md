@@ -9,8 +9,8 @@
 
 | 日付 | 内容 |
 |---|---|
-| 07-17 | CoMLOps-Large デコード仕様のリバースエンジニアリング(アンカー実測フィット → `comlops_large_detector_ml.param.yaml`) |
-| 07-17 | fp32 ONNX のブラー誤検出問題を根本解明 → int8 `.engine` 対応(`trt_run.cpp`) |
+| 07-17 | CoMLOps-Large デコード仕様のリバースエンジニアリング(アンカー実測フィット → `configs/model_params/comlops_large_detector_ml.param.yaml`) |
+| 07-17 | fp32 ONNX のブラー誤検出問題を根本解明 → int8 `.engine` 対応(`tools/trt_run.cpp`) |
 | 07-18 | タイル推論 `--tiles`(578f 評価: 検出 +20%、デグレ 0) |
 | 07-18 | 内部IF凍結: `tlr_autolabel/v1` スキーマ + 正準 state 語彙(README 参照) |
 | 07-18 | L2 エクスポータ: `export_labels.py`(COCO / CVAT 1.1) |
@@ -283,7 +283,7 @@ autolabelingで再現可能に選べるようにする。出力IFは既存
 `tlr_autolabel/v1` の `lamps[]` / `state` を維持し、L3以降へ影響を出さない。
 
 方針:
-- 先行: ONNX版は現行decode(`lamp_recognizer_ml.param.yaml`)と互換なので、
+- 先行: ONNX版は現行decode(`configs/model_params/lamp_recognizer_ml.param.yaml`)と互換なので、
   `configs/detectors` のプリセットから detector + classifier + classifier_param を
   一括指定できるようにする。
 - 次点: classifier `.engine` は `TrtServer` 経由で実装する。dynamic batch engineは
@@ -300,7 +300,7 @@ autolabelingで再現可能に選べるようにする。出力IFは既存
       `/opt/autoware/mlmodels` へ解決する。
 - [x] `--classifier *.engine` を受ける `LampClassifier` backend 分岐を追加。
       batch>1 engineは先頭batchへcropを入れて残りをzero paddingする。
-      `trt_run.cpp` は dynamic batch engine の profile shape を解決してからbuffer確保するよう修正。
+      `tools/trt_run.cpp` は dynamic batch engine の profile shape を解決してからbuffer確保するよう修正。
 - [x] ONNX smoke: `/opt` detector + `/opt` LampRecognizer で `tlr_autolabel/v1` が出ることを確認。
       `CAM_TRAFFIC_LIGHT_FAR/00000.jpg` で `red-circle` 1件、`classifier_backend=['CPUExecutionProvider']`。
 - [x] GPU環境で classifier engine smoke。sandbox外実行で

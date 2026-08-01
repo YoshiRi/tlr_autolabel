@@ -34,7 +34,7 @@ is a derived dataset dir (source symlinked, generated tables replaced) -- the
 source annotation is never edited.
 
 Usage:
-  python3 to_object_ann.py --t4-dataset <src> --out <derived> \
+  python3 scripts/to_object_ann.py --t4-dataset <src> --out <derived> \
       (--autolabel-dir <dir> | --sidecar <traffic_signal_2d_ann.json>)
 """
 import argparse
@@ -45,7 +45,9 @@ import os
 import numpy as np
 import yaml
 
-from state_tokens import parse_state
+import _bootstrap  # noqa: F401
+
+from tlr_autolabel.core.state_tokens import parse_state
 from tlr_autolabel.core.io import token_of
 from tlr_autolabel.t4.object_ann import assign_instances
 from tlr_autolabel.t4.traffic_light import build_traffic_light_row
@@ -77,7 +79,8 @@ def box_rle(box, w, h):
 
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-VOCAB_PATH = os.path.join(HERE, "configs", "state_vocab", "db_tlr.yaml")
+REPO_ROOT = os.path.dirname(HERE)
+VOCAB_PATH = os.path.join(REPO_ROOT, "configs", "state_vocab", "db_tlr.yaml")
 
 # our visibility -> standard occlusion_state (truncation not tracked in autolabel;
 # defaults to non-truncated, a reviewer sets it). Absent visibility -> none.

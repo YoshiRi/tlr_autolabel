@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def _load_tlr_autolabel_script():
     spec = importlib.util.spec_from_file_location(
-        "_tlr_autolabel_script_lamp_test", ROOT / "tlr_autolabel.py")
+        "_tlr_autolabel_script_lamp_test", ROOT / "scripts" / "tlr_autolabel.py")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module

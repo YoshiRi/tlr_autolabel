@@ -1,6 +1,6 @@
 import unittest
 
-from match_traffic_lights import collect_low_tracking_candidates
+from tlr_autolabel.tracking.inputs import collect_low_tracking_candidates
 
 
 class TrackingInputTest(unittest.TestCase):

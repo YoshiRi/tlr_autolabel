@@ -1,6 +1,7 @@
 # build artifacts / caches
 __pycache__/
 trt_run
+build/
 # local eyeball-check renders (36MB of PNGs; regenerate with --viz)
 sample_preview/
 

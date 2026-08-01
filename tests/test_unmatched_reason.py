@@ -1,4 +1,4 @@
-"""Unit tests for match_traffic_lights.py's unmatched_reason() classifier.
+"""Unit tests for the unmatched_reason() classifier.
 
 Prerequisite coverage REFACTOR_PLAN.md calls for before attempting the
 Phase 5 L3 map-enrichment split ("duplicate prevention, and map-missing
@@ -6,11 +6,11 @@ behavior"): this pins the review-triage classification for a detection
 with no map candidate in view (map-missing) and one whose nearest
 candidate was already claimed by another detection (duplicate
 prevention), alongside the other two branches, without touching
-match_traffic_lights.py itself.
+the CLI orchestration itself.
 """
 import unittest
 
-from match_traffic_lights import unmatched_reason
+from tlr_autolabel.map.association import unmatched_reason
 
 
 def det(box):
