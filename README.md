@@ -49,7 +49,7 @@ Design rules:
   T4 linkage is optional via `--t4-dataset`, never required.
 - **Tier B is strictly standard.** `object_ann` carries only standard 2D
   annotation keys. `traffic_light.json` is the B' relation table
-  `{token, instance_token, traffic_light_linestring_id}`; it is a t4dataset
+  `{token, instance_token, primitive_id}`; it is a t4dataset
   type defined in t4devkit, not a repo-local ad hoc sidecar. Regulatory-element
   and group relationships are resolved from the map.
 - **L3 adds fields, does not transform**, and is now an internal aid (feeds B',
@@ -73,7 +73,7 @@ linestring relation in `traffic_light.json`.
 | **A** | `tlr_autolabel/v1` (frozen 2026-07-18) | no | raw autolabel per frame; **richest** — full per-lamp color/shape/arrow + confidence; source of truth |
 | **A'** | `traffic_signal_2d/v2` sidecar + `traffic_signal_re/v1` | yes | L3 internal enrichment: canonical `state`, `map_traffic_light_id`, review fields, RE fusion. Used for review/QA + B' population; **not a delivered format** |
 | **B** | standard t4 `object_ann.json` (+ `category`/`attribute`) | no | **the solid interface.** bbox + db_tlr `category` + `occlusion_state`/`truncation_state` + optional 2D `instance`. Consumed by AWML/Deepen/CVAT/COCO via existing tooling |
-| **B'** | B + `traffic_light.json` | yes | B plus t4devkit-defined traffic-light relation rows: `{token, instance_token, traffic_light_linestring_id}`. Relation absence means no map match. RE/group relations come from the map |
+| **B'** | B + `traffic_light.json` | yes | B plus t4devkit-defined traffic-light relation rows: `{token, instance_token, primitive_id}`. Relation absence means no map match. RE/group relations come from the map |
 | **B-review** | `traffic_signal_re_review/v1` | — | human RE state-interval decisions; propagates into the reviewed annotation |
 
 In B/B', `object_ann.instance_token` is a standard T4 2D annotation instance,
@@ -81,7 +81,7 @@ not a lanelet2 map id. The current converter assigns it from per-camera bbox
 continuity. If no 2D cross-frame object association is made, each observation
 still receives a generated 2D instance ID; do not encode Traffic Light IDs in
 `instance_token` or `instance_name`. Physical map identity lives only in
-`traffic_light.json` as `instance_token -> traffic_light_linestring_id`.
+`traffic_light.json` as `instance_token -> primitive_id`.
 
 Deprecated: `annotation/traffic_light_map_association.json` was a transitional
 repo-local file (`object_ann_token -> map_traffic_light_id`). New code and docs

@@ -22,13 +22,10 @@ from pathlib import Path
 from xml.etree import ElementTree as ET
 
 from state_tokens import CANON_RE, LEGACY_RE, elements_key, parse_state
+from tlr_autolabel.core.io import load_json
 
 SIGNAL_LABELS = {"traffic_light"}
 TOKEN_NAMESPACE = uuid.UUID("5e3a5a36-739d-4c1e-aaf4-bdfd8bb18857")
-
-
-def load_json(path: Path):
-    return json.loads(path.read_text())
 
 
 # ------------------------------------------------------------------ T4 lookup
