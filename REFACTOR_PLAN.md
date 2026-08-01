@@ -490,6 +490,8 @@ Phase 1.8 is now in progress on `refactor/phase1-8-review`:
 - T4 A->B/B' converters moved behind `tlr_autolabel.t4.convert`,
   `tlr_autolabel.t4.object_ann_export`, and `tlr_autolabel.t4.re_export`; the
   corresponding `scripts/` files are thin wrappers
+- L3 map-enrichment orchestration moved behind `tlr_autolabel.cli.match`; the
+  `scripts/match_traffic_lights.py` command is a thin wrapper
 - pure compatibility shims removed after callers were migrated to package paths
 - model params moved under `configs/model_params/`
 - tracked model artifact moved under `models/`
@@ -498,8 +500,8 @@ Phase 1.8 is now in progress on `refactor/phase1-8-review`:
 
 Remaining refactor work after this phase:
 
-1. Continue splitting `scripts/match_traffic_lights.py` until map loading,
-   projection, association, and report writing are independently reusable.
+1. Continue splitting `tlr_autolabel.cli.match` until remaining report writing,
+   fill/backfill orchestration, and sidecar emission are independently reusable.
 2. Decide whether `data/` and `sample_preview/` should stay as local-only
    ignored folders or become explicit fixture/artifact locations.
 3. Add direct package-level tests for the new `tlr_autolabel.t4.convert` and
