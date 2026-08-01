@@ -1,23 +1,9 @@
 """Unit tests for tlr_autolabel/inference/detector.py (REFACTOR_PLAN.md phase 6
-extraction from tlr_autolabel.py). Also pins that tlr_autolabel.py re-exports
-the identical package classes/functions, so the old top-level import path
-keeps working unchanged.
+extraction from the L1 CLI).
 """
-import importlib.util
 import unittest
-from pathlib import Path
 
 from tlr_autolabel.inference.detector import clipped_detection_box, det_nms, tile_origins
-
-ROOT = Path(__file__).resolve().parents[1]
-
-
-def _load_tlr_autolabel_script():
-    spec = importlib.util.spec_from_file_location(
-        "_tlr_autolabel_script_detector_test", ROOT / "scripts" / "tlr_autolabel.py")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
 
 
 class DetNmsTest(unittest.TestCase):
@@ -57,16 +43,6 @@ class ClippedDetectionBoxTest(unittest.TestCase):
     def test_returns_none_when_below_min_box(self):
         box = clipped_detection_box({"x1": 0, "y1": 0, "x2": 2, "y2": 2}, 100, 100, min_box=8.0)
         self.assertIsNone(box)
-
-
-class ReexportIdentityTest(unittest.TestCase):
-    def test_tlr_autolabel_reexports_same_objects(self):
-        module = _load_tlr_autolabel_script()
-        from tlr_autolabel.inference import detector
-
-        self.assertIs(module.Detector, detector.Detector)
-        self.assertIs(module.detect_full_and_tiles, detector.detect_full_and_tiles)
-        self.assertIs(module.clipped_detection_box, detector.clipped_detection_box)
 
 
 if __name__ == "__main__":

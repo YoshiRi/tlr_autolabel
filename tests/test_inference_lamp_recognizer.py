@@ -1,21 +1,9 @@
 """Unit tests for tlr_autolabel/inference/lamp_recognizer.py (REFACTOR_PLAN.md
 phase 6 extraction from tlr_autolabel.py).
 """
-import importlib.util
 import unittest
-from pathlib import Path
 
 from tlr_autolabel.inference.lamp_recognizer import lamp_label, normalize_lamps, signal_state
-
-ROOT = Path(__file__).resolve().parents[1]
-
-
-def _load_tlr_autolabel_script():
-    spec = importlib.util.spec_from_file_location(
-        "_tlr_autolabel_script_lamp_test", ROOT / "scripts" / "tlr_autolabel.py")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
 
 
 class LampLabelTest(unittest.TestCase):
@@ -44,16 +32,6 @@ class NormalizeLampsTest(unittest.TestCase):
         normalized = normalize_lamps(lamps)
         self.assertEqual(set(normalized[0].keys()),
                          {"label", "color", "shape", "arrow", "confidence"})
-
-
-class ReexportIdentityTest(unittest.TestCase):
-    def test_tlr_autolabel_reexports_same_objects(self):
-        module = _load_tlr_autolabel_script()
-        from tlr_autolabel.inference import lamp_recognizer
-
-        self.assertIs(module.LampClassifier, lamp_recognizer.LampClassifier)
-        self.assertIs(module.normalize_lamps, lamp_recognizer.normalize_lamps)
-        self.assertIs(module.signal_state, lamp_recognizer.signal_state)
 
 
 if __name__ == "__main__":

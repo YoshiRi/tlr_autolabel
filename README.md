@@ -43,9 +43,10 @@ lanelet2 traffic-light IDs.
 
 ## Repository layout
 
-- `tlr_autolabel/`: reusable Python package split by domain (`core`,
-  `inference`, `map`, `tracking`, `t4`, `review`, `eval`).
-- `scripts/`: command-line entrypoints. Use `python3 scripts/<tool>.py ...`.
+- `tlr_autolabel/`: reusable Python package split by domain (`cli`, `core`,
+  `inference`, `map`, `tracking`, `t4`, `review`, `eval`). The heavier command
+  orchestration now lives here, so tests and future tools can import it directly.
+- `scripts/`: thin command-line entrypoints. Use `python3 scripts/<tool>.py ...`.
 - `configs/`: detector presets, state vocabularies, model parameter YAMLs, and
   tracking profiles.
 - `models/`: small checked-in model artifacts used as defaults or debug aids.

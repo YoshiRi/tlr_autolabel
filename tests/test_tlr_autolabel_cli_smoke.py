@@ -5,7 +5,6 @@ payload assembly, file writing) against a synthetic image with the
 Detector/LampClassifier backends monkeypatched to fakes, so no real
 model file or GPU is needed. See REFACTOR_PLAN.md section 2.
 """
-import importlib.util
 import json
 import sys
 import tempfile
@@ -17,15 +16,10 @@ import numpy as np
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def _load_tlr_autolabel_script():
-    # tlr_autolabel.py (this CLI script) and the tlr_autolabel/ package (see
-    # REFACTOR_PLAN.md) share a name; the package always wins a plain
-    # `import tlr_autolabel`, so load the script by explicit path instead.
-    spec = importlib.util.spec_from_file_location(
-        "_tlr_autolabel_script_smoke", ROOT / "scripts" / "tlr_autolabel.py")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+def _load_autolabel_module():
+    from tlr_autolabel.cli import autolabel
+
+    return autolabel
 
 
 class FakeDetector:
@@ -59,7 +53,7 @@ class TlrAutolabelCliSmokeTest(unittest.TestCase):
         img_path = image_dir / "00000.png"
         img = np.zeros((100, 100, 3), dtype=np.uint8)
 
-        module = _load_tlr_autolabel_script()
+        module = _load_autolabel_module()
         import cv2
         cv2.imwrite(str(img_path), img)
 

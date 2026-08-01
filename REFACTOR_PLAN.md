@@ -485,6 +485,11 @@ Phase 1.8 is now in progress on `refactor/phase1-8-review`:
 - top-level CLI entrypoints moved under `scripts/`
 - reusable review/eval logic moved under `tlr_autolabel.review` and
   `tlr_autolabel.eval`
+- L1 orchestration moved behind `tlr_autolabel.cli.autolabel`; the
+  `scripts/tlr_autolabel.py` command is a thin wrapper
+- T4 A->B/B' converters moved behind `tlr_autolabel.t4.convert`,
+  `tlr_autolabel.t4.object_ann_export`, and `tlr_autolabel.t4.re_export`; the
+  corresponding `scripts/` files are thin wrappers
 - pure compatibility shims removed after callers were migrated to package paths
 - model params moved under `configs/model_params/`
 - tracked model artifact moved under `models/`
@@ -493,14 +498,13 @@ Phase 1.8 is now in progress on `refactor/phase1-8-review`:
 
 Remaining refactor work after this phase:
 
-1. Move the L1 orchestration in `scripts/tlr_autolabel.py` behind a package
-   entrypoint, leaving only argument parsing in the script.
-2. Move the T4 conversion scripts into `tlr_autolabel.t4` modules with thin CLI
-   wrappers.
-3. Continue splitting `scripts/match_traffic_lights.py` until map loading,
+1. Continue splitting `scripts/match_traffic_lights.py` until map loading,
    projection, association, and report writing are independently reusable.
-4. Decide whether `data/` and `sample_preview/` should stay as local-only
+2. Decide whether `data/` and `sample_preview/` should stay as local-only
    ignored folders or become explicit fixture/artifact locations.
+3. Add direct package-level tests for the new `tlr_autolabel.t4.convert` and
+   `tlr_autolabel.cli.autolabel` entrypoints where the current coverage still
+   exercises only wrapper-level behavior.
 
 The original first step for this plan was:
 
