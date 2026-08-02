@@ -480,7 +480,12 @@ synthetic tests and CLI help still work after the move.
 
 ## Immediate Next Step
 
-Phase 1.8 is now in progress on `refactor/phase1-8-review`:
+**Status (2026-08-02): Phase 1.8 merged (PR #2), plus a follow-up cwd fix
+(PR #3). The package skeleton refactor is effectively done.** The next
+priorities are capability work, not more restructuring — see the reprioritized
+list below.
+
+Phase 1.8 (merged in PR #2 on `refactor/phase1-8-review`):
 
 - top-level CLI entrypoints moved under `scripts/`
 - reusable review/eval logic moved under `tlr_autolabel.review` and
@@ -498,15 +503,34 @@ Phase 1.8 is now in progress on `refactor/phase1-8-review`:
 - TensorRT helper source moved under `tools/`, binary output under ignored
   `build/`
 
-Remaining refactor work after this phase:
+Reprioritized next steps (2026-08-02). Do NOT front-load more library reorg —
+Phase 1-8 covered the structural debt with diminishing returns beyond it. The
+higher-leverage work is:
 
-1. Continue splitting `tlr_autolabel.cli.match` until remaining report writing,
-   fill/backfill orchestration, and sidecar emission are independently reusable.
-2. Decide whether `data/` and `sample_preview/` should stay as local-only
-   ignored folders or become explicit fixture/artifact locations.
-3. Add direct package-level tests for the new `tlr_autolabel.t4.convert` and
-   `tlr_autolabel.cli.autolabel` entrypoints where the current coverage still
-   exercises only wrapper-level behavior.
+1. **Docker image (in progress).** Reproducible GPU runtime that unifies the
+   int8 `.engine` and fp32 `.onnx` paths in one image and retires the
+   `setup_gpu_venv.sh` + `run_gpu.sh` `LD_LIBRARY_PATH` setup. Independent of
+   the remaining refactor. See `Dockerfile`, `.dockerignore`, `docs/docker.md`
+   and PLAN.md item 10.
+2. **Formalize the model IF** before onboarding other open models: replace the
+   implicit ONNX-output-count family guess (`inference/detector.py`) with an
+   explicit `model_type` in the preset + a small `Detector`/`Classifier`
+   protocol + registry. Small, targeted — not a big reorg. See PLAN.md item 11.
+
+Deferred (do opportunistically, when the code is touched anyway — not as
+standalone projects):
+
+- Continue splitting `tlr_autolabel.cli.match` (still ~814 LOC): report writing,
+  fill/backfill orchestration, sidecar emission into independently reusable
+  pieces. Internal-only; blocks neither Docker nor model onboarding.
+- Promote the data IFs (`tlr_autolabel/v1`, `traffic_signal_2d/v2`,
+  `traffic_signal_re/v1`) into in-code schemas + validators — mainly to reduce
+  drift with the external consumer repos.
+- Decide whether `data/` and `sample_preview/` stay local-only ignored folders
+  or become explicit fixture/artifact locations.
+- Add direct package-level tests for `tlr_autolabel.t4.convert` and
+  `tlr_autolabel.cli.autolabel` (current coverage exercises only wrapper-level
+  behavior).
 
 The original first step for this plan was:
 

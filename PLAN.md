@@ -3,7 +3,7 @@
 作業計画の単一管理ファイル。タスクの追加・完了・方針変更はここを更新する。
 設計の契約は README.md 冒頭(処理層 / Tier A-C + B-review)。矛盾時は README を正とする。
 
-最終更新: 2026-07-31
+最終更新: 2026-08-02
 
 ## ✅ 完了(日付順)
 
@@ -349,6 +349,31 @@ autolabelingで再現可能に選べるようにする。出力IFは既存
 - [ ] `meta` にランタイム来歴(onnxruntime/TRT版、GPU名、ツールの git commit)
 - [ ] Dockerfile(CUDA/TRT pin)で最終保証
 
+### 10. [進行中 2026-08-02] 実行環境の Docker 化(再現性・trt/engine 利用)
+リポジトリ最大の再現性リスク(初回 `g++` コンパイル・system TensorRT・
+`LD_LIBRARY_PATH` 手当て・venv 2プロファイル)を1イメージで根治する。他の
+リファクタとは独立で、いま着手すると投資対効果が最も高い(2026-08-02 判断)。
+- [x] `Dockerfile`(`nvcr.io/nvidia/tensorrt:25.01-py3` = TRT 10.8.0.43 / CUDA 12.8、
+      実機一致)。engine経路(system libnvinfer)と onnx経路(onnxruntime-gpu)を統合、
+      `trt_run` はビルド時コンパイル。→ 項目9の「Dockerfile(CUDA/TRT pin)で最終保証」に対応
+- [x] `.dockerignore`(`data/` 5G・`sample_preview/` 除外、同梱モデルは保持)、`docs/docker.md`
+- [x] 実機ビルド + GPU 実行の受け入れ(RTX 3060, TRT10.8/CUDA12.8): イメージ内テスト 66/66、
+      実フレームで onnx→CUDAExecutionProvider / `.engine`→trt_run(tensorrt-engine)の両経路OK。
+      過程で `ENV PYTHONPATH` が `scripts/*` を shadow するバグを発見・修正(`6000a91`)
+- [x] マウント運用の注意点を docs 化: Autoware `mlmodels/*` は `model-store` へのシンボリック
+      リンク → コンテナ内でリンク切れ。`-v /opt/autoware:/opt/autoware:ro` で回避
+- [ ] 永続 engine キャッシュ用の書込みマウント方針を確定(現状は onnx→engine を毎 run 再ビルド)
+- [ ] `setup_gpu_venv.sh` / `run_gpu.sh` を「ネイティブ用の代替手段」と位置づけ、標準は Docker に寄せる
+
+### 11. [次] モデルIFの明示化(他オープンモデル対応の前提)
+他オープンモデルを載せる前に、暗黙の family 推測(ONNX 出力数 1=yolox/3=comlops、
+`inference/detector.py`)をやめ、プリセットに `model_type` を明示 + `Detector`/`Classifier`
+を小さな protocol + レジストリ化する。局所リファクタ(半日〜1日規模)、大整理は不要。
+- [ ] プリセット schema に `model_type`(必須化 or 後方互換で推測フォールバック)
+- [ ] `Detector`/`Classifier` の最小 protocol(preprocess → decode → boxes/lamps)+ 名前レジストリ
+- [ ] 新モデル = decode モジュール追加 + 登録、で済むことを1本の他モデルで実証
+- [ ] `cli/match.py`(814行)分割・データIFのコード内スキーマ化は**触る時ついで**で対応(単独着手しない)
+
 ### 6. [backlog] 高速化の続き(現状 0.78s/frame で実用十分。必要になったら)
 - [ ] フレーム間パイプライン化(JPEG デコード/前処理と GPU の重なり)→ ~0.3s/frame 見込み
 - [ ] タイルのバッチ推論(エンジンを batch=5 でリビルド)
@@ -356,10 +381,12 @@ autolabelingで再現可能に選べるようにする。出力IFは既存
 
 ## 運用メモ
 
+- CLI エントリは `scripts/` 配下(PR #2, 2026-08-01 でパッケージ化)。Docker では
+  `docker run ... tlr_autolabel scripts/<tool>.py ...`(`docs/docker.md`)。
 - 本番ラベリングの標準手順:
   1. `./run_gpu.sh <dataset>/data/<CH> --preset yolox-1920-int8 --t4-dataset <dataset> --out-dir <out> --run-id <id>`(カメラ毎)
-  2. `python3 match_traffic_lights.py --dataset-root <dataset>`
-  3. `python3 aggregate_regulatory_signals.py --dataset-root <dataset>`
-  4. `python3 render_re_timeline.py --dataset-root <dataset>` → `build/tl_match/re_timeline.html`
-  5. `python3 evaluate_signals.py --dataset-root <dataset> [--baseline <old_sidecar>]` → `build/tl_match/eval_report.{json,md}`
+  2. `python3 scripts/match_traffic_lights.py --dataset-root <dataset>`
+  3. `python3 scripts/aggregate_regulatory_signals.py --dataset-root <dataset>`
+  4. `python3 scripts/render_re_timeline.py --dataset-root <dataset>` → `build/tl_match/re_timeline.html`
+  5. `python3 scripts/evaluate_signals.py --dataset-root <dataset> [--baseline <old_sidecar>]` → `build/tl_match/eval_report.{json,md}`
 - このファイルと README、プロジェクトメモリ(`.claude-mine/.../memory/`)が3点セット
