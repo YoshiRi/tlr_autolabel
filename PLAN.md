@@ -339,15 +339,18 @@ autolabelingで再現可能に選べるようにする。出力IFは既存
 - [x] `requirements.txt`(CPU/GPU 2プロファイル、バージョン pin)、`setup_gpu_venv.sh`
 - [x] `run_gpu.sh` の venv を `$TLR_GPU_VENV` 化、`trt_run` ビルドを `$CUDA_HOME` 化
 
-### 9. [backlog] モデル管理(再現性の深掘り — 必要になるまで保留)
-「.engine の移植不可」と「モデルの内容同一性」を根治する塊。1データセット・1マシン
-運用では投資対効果が低いため後回し(2026-07-19 判断):
-- [ ] モデルの sha256 をプリセットに記録・ロード時検証、`meta` に detector/classifier hash
+### 9. [進行中 2026-08-02] モデル管理(再現性の深掘り)
+「.engine の移植不可」と「モデルの内容同一性」を根治する塊。公開手続きは急がない前提で
+**社内利用向けに hash ベース管理から着手**(2026-08-02 方針変更、旧: 必要まで保留)。
+- [x] hash ベース来歴: `configs/models.yaml`(sha256 キーの既知good登録)+ `core/models.py`。
+      L1 が detector/classifier の sha256 を `meta` に記録、既知なら人間名も付与、未登録 .onnx は警告。
+      → **vendored classifier(300af04)と公開ストア(ed6c574/awf4.1)のバイト乖離を検知できる状態に**
+- [ ] `--classifier` 既定を公開ストア寄りに、vendored `models/*.onnx` は乖離解消後に廃止候補
 - [ ] `.engine` のローカルキャッシュ化 + 自動ビルド(キー: model hash × GPU名 × TRT版)、
       fp32 フォールバック時は品質警告(yolox ブラーFP問題)
-- [ ] プリセットに `source_url`(model zoo / webauto)を持たせ自動取得
 - [ ] `meta` にランタイム来歴(onnxruntime/TRT版、GPU名、ツールの git commit)
-- [ ] Dockerfile(CUDA/TRT pin)で最終保証
+- [ ] (公開後)プリセットに `source_url` + hash pin で fetch。今は社内=マウント運用のみ
+- [x] Dockerfile(CUDA/TRT pin)で最終保証 → 項目10で完了
 
 ### 10. [進行中 2026-08-02] 実行環境の Docker 化(再現性・trt/engine 利用)
 リポジトリ最大の再現性リスク(初回 `g++` コンパイル・system TensorRT・
