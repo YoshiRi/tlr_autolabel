@@ -23,10 +23,10 @@ def _load_autolabel_module():
 
 
 class FakeDetector:
-    def __init__(self, _model_path, _comlops_param):
+    def __init__(self, _model_path, _comlops_param, model_type=None):
         self.w = 64
         self.h = 64
-        self.kind = "yolox"
+        self.kind = model_type or "yolox"
         self.sess = None
 
     def detect(self, _img, score_thr):

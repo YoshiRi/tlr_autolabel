@@ -3,6 +3,7 @@
 # (no blur FPs). Run via run_gpu.sh for speed. Decode params (empirically
 # fitted anchors) come from configs/model_params/comlops_large_detector_ml.param.yaml.
 detector: ${TLR_MODEL_ROOT}/traffic_light_classifier/CoMLOps-Large-Detection-Model-v1.0.1.onnx
+detector_type: comlops
 det_score_thr: 0.3
 det_classes: TRAFFIC_LIGHT
 tiles: true

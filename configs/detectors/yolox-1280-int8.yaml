@@ -1,3 +1,4 @@
 # TLRtest: YOLOX-sPlus traffic_light 1280x1280, int8 TensorRT engine.
 detector: ${TLR_MODEL_ROOT}/TLRtest/traffic_light_detector/yolox-sPlus-opt-Co_MLOps-traffic_light-1280x1280_20260703_best.engine
+detector_type: yolox
 tiles: true

@@ -373,8 +373,9 @@ autolabelingで再現可能に選べるようにする。出力IFは既存
       `DetectorModel` protocol + `yolox`/`comlops` を既存 decode/preprocess の wrap で登録)。
       `Detector` はレジストリ経由に(出力数推測は fallback として維持)。unit test 10件で
       wiring を pin、全体 76/76、Docker 実機で onnx/engine 両経路の非regression確認
-- [ ] 段階B: プリセットに `detector_type` + `--detector-type` を追加、同梱プリセットに明示、
-      推測は warn フォールバックへ降格。`.engine` プリセットも実 family を宣言可能に
+- [x] **段階B**: `--detector-type` 追加 + 全同梱プリセットに `detector_type` 明示
+      (`.engine` も family 宣言)。`model_type` 未指定時は推測 + `UserWarning`。README 更新、
+      プリセット検証テスト追加、全体 77/77、Docker 実機で「preset=warnなし / bare --detector=warnあり」確認
 - [ ] 段階C: 他オープンモデル1本を通して seam が薄いことを実証 → README にレシピ
 - [ ] classifier 側の seam は 2つ目の classifier が出た時に(現状 LampRecognizer 単一なので後回し)
 - [ ] `cli/match.py`(814行)分割・データIFのコード内スキーマ化は**触る時ついで**で対応(単独着手しない)
