@@ -18,11 +18,14 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shutil
 import subprocess
 import sys
 import tempfile
 from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
 
 from tlr_autolabel.review.re_apply import apply_review, normalize_decisions, timestamps_by_sample
 from tlr_autolabel.review.re_template import build_template
@@ -128,7 +131,16 @@ def run_to_object_ann(args: argparse.Namespace, sidecar_path: Path) -> None:
     ]
     if args.write_deprecated_map_association:
         cmd.append("--write-deprecated-map-association")
-    subprocess.run(cmd, check=True)
+    # `python -m tlr_autolabel.t4.convert` only resolves when the repo root is on
+    # the child's import path; the parent's in-process sys.path (set via the
+    # scripts/ bootstrap) does not propagate to the subprocess. Inject it via
+    # PYTHONPATH so this works regardless of the caller's cwd. cwd is left
+    # untouched because --dataset-root / --out may be relative to it.
+    env = {**os.environ}
+    env["PYTHONPATH"] = os.pathsep.join(
+        p for p in (str(REPO_ROOT), env.get("PYTHONPATH", "")) if p
+    )
+    subprocess.run(cmd, check=True, env=env)
 
 
 def parse_args() -> argparse.Namespace:
