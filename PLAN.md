@@ -357,9 +357,12 @@ autolabelingで再現可能に選べるようにする。出力IFは既存
       実機一致)。engine経路(system libnvinfer)と onnx経路(onnxruntime-gpu)を統合、
       `trt_run` はビルド時コンパイル。→ 項目9の「Dockerfile(CUDA/TRT pin)で最終保証」に対応
 - [x] `.dockerignore`(`data/` 5G・`sample_preview/` 除外、同梱モデルは保持)、`docs/docker.md`
-- [ ] 実機ビルド + GPU 実行の受け入れ(int8 engine 1フレーム / onnx 1フレーム一致確認)
-- [ ] モデルストア・engine は**マウント運用**(イメージに焼かない=GPUアーキ依存の build artifact)。
-      永続 engine キャッシュ用の書込みマウント方針を README/docker.md に確定
+- [x] 実機ビルド + GPU 実行の受け入れ(RTX 3060, TRT10.8/CUDA12.8): イメージ内テスト 66/66、
+      実フレームで onnx→CUDAExecutionProvider / `.engine`→trt_run(tensorrt-engine)の両経路OK。
+      過程で `ENV PYTHONPATH` が `scripts/*` を shadow するバグを発見・修正(`6000a91`)
+- [x] マウント運用の注意点を docs 化: Autoware `mlmodels/*` は `model-store` へのシンボリック
+      リンク → コンテナ内でリンク切れ。`-v /opt/autoware:/opt/autoware:ro` で回避
+- [ ] 永続 engine キャッシュ用の書込みマウント方針を確定(現状は onnx→engine を毎 run 再ビルド)
 - [ ] `setup_gpu_venv.sh` / `run_gpu.sh` を「ネイティブ用の代替手段」と位置づけ、標準は Docker に寄せる
 
 ### 11. [次] モデルIFの明示化(他オープンモデル対応の前提)
