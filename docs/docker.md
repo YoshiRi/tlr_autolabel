@@ -40,14 +40,28 @@ shows the `nvidia` runtime + `nvidia.com/gpu` CDI devices).
 # --help (default CMD)
 docker run --rm --gpus all tlr_autolabel
 
-# L1 over a mounted dataset with the Autoware model store, int8 engine preset.
+# L1 over a mounted dataset with the Autoware model store.
 # Mount the model root to /models (matches TLR_MODEL_ROOT / AUTOWARE_MLMODELS).
 docker run --rm --gpus all \
-  -v /opt/autoware/mlmodels:/models:ro \
+  -v /path/to/mlmodels:/models:ro \
   -v /path/to/dataset:/data \
   tlr_autolabel scripts/tlr_autolabel.py /data/CAM_FRONT \
     --preset yolox-1920-int8 --out-dir /data/labels
 ```
+
+> **Symlinked model stores (Autoware `mlmodels`).** `/opt/autoware/mlmodels/*`
+> are symlinks into `/opt/autoware/model-store/...`, so mounting only
+> `mlmodels` leaves the links dangling inside the container ("model not
+> found"). Mount the whole tree at the same path and point the env at it:
+>
+> ```bash
+> docker run --rm --gpus all \
+>   -v /opt/autoware:/opt/autoware:ro \
+>   -e AUTOWARE_MLMODELS=/opt/autoware/mlmodels \
+>   -v /path/to/dataset:/data \
+>   tlr_autolabel scripts/tlr_autolabel.py /data/CAM_FRONT \
+>     --preset autoware-mlmodels-960-onnx --out-dir /data/labels
+> ```
 
 The entrypoint is `python3`, so any script/module works:
 
@@ -65,8 +79,23 @@ The first int8 run against a `.onnx` builds the `.engine` (~1–2 s deserialize
 amortized by the `trt_run` serve mode). Persist engines by mounting a writable
 model dir so the build is reused across `docker run` invocations.
 
+## Verified
+
+On RTX 3060 Laptop (driver 580), host TensorRT 10.8 / CUDA 12.8:
+
+- `docker build` clean; `trt_run` compiled into the image.
+- `-m unittest discover -s tests` → 66/66 inside the image.
+- L1 on a real frame, both backends: onnx preset →
+  `backend=['CUDAExecutionProvider', ...]`; `.engine` detector →
+  `backend=tensorrt-engine` (trt_run + system libnvinfer). Both wrote valid
+  `tlr_autolabel/v1` JSON.
+
 ## Notes / caveats
 
+- **`ENV PYTHONPATH` is intentionally NOT set.** The `scripts/` wrappers
+  self-bootstrap the repo root; setting `PYTHONPATH=/workspace/tlr_autolabel`
+  leaves `scripts/` ahead of it, so `scripts/tlr_autolabel.py` shadows the
+  `tlr_autolabel` package. See the note in the `Dockerfile`.
 - **GPU visibility at build**: not needed — `trt_run` only links against TRT/CUDA
   libs. The GPU is required only at `docker run` (`--gpus all`).
 - **onnxruntime-gpu ↔ cuDNN**: `onnxruntime-gpu==1.23.0` loads the base image's

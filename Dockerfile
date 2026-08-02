@@ -44,9 +44,12 @@ RUN mkdir -p build && \
         -lnvinfer -lcudart && \
     test -x build/trt_run
 
-# Package importable from any cwd (also makes `python -m tlr_autolabel.*` and
-# the scripts/ wrappers resolve without relying on cwd).
-ENV PYTHONPATH=/workspace/tlr_autolabel
+# NOTE: do NOT set PYTHONPATH=/workspace/tlr_autolabel here. The scripts/
+# wrappers self-bootstrap the repo root onto sys.path (scripts/_bootstrap.py),
+# but only when it is not already present. Putting the repo root on PYTHONPATH
+# leaves the scripts/ dir ahead of it in sys.path, so `scripts/tlr_autolabel.py`
+# shadows the `tlr_autolabel` package ("not a package"). WORKDIR + _bootstrap
+# already make imports work from any cwd.
 # Default mount points for the model store; override to taste.
 ENV TLR_MODEL_ROOT=/models \
     AUTOWARE_MLMODELS=/models
