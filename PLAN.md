@@ -365,13 +365,18 @@ autolabelingで再現可能に選べるようにする。出力IFは既存
 - [ ] 永続 engine キャッシュ用の書込みマウント方針を確定(現状は onnx→engine を毎 run 再ビルド)
 - [ ] `setup_gpu_venv.sh` / `run_gpu.sh` を「ネイティブ用の代替手段」と位置づけ、標準は Docker に寄せる
 
-### 11. [次] モデルIFの明示化(他オープンモデル対応の前提)
+### 11. [進行中 2026-08-02] モデルIFの明示化(他オープンモデル対応の前提)
 他オープンモデルを載せる前に、暗黙の family 推測(ONNX 出力数 1=yolox/3=comlops、
 `inference/detector.py`)をやめ、プリセットに `model_type` を明示 + `Detector`/`Classifier`
-を小さな protocol + レジストリ化する。局所リファクタ(半日〜1日規模)、大整理は不要。
-- [ ] プリセット schema に `model_type`(必須化 or 後方互換で推測フォールバック)
-- [ ] `Detector`/`Classifier` の最小 protocol(preprocess → decode → boxes/lamps)+ 名前レジストリ
-- [ ] 新モデル = decode モジュール追加 + 登録、で済むことを1本の他モデルで実証
+を小さな protocol + レジストリ化する。設計: `docs/model_interface.md`。段階A/B/C で bit-identical に移行。
+- [x] **段階A(detector seam、挙動不変)**: `tlr_autolabel/inference/models/`(registry +
+      `DetectorModel` protocol + `yolox`/`comlops` を既存 decode/preprocess の wrap で登録)。
+      `Detector` はレジストリ経由に(出力数推測は fallback として維持)。unit test 10件で
+      wiring を pin、全体 76/76、Docker 実機で onnx/engine 両経路の非regression確認
+- [ ] 段階B: プリセットに `detector_type` + `--detector-type` を追加、同梱プリセットに明示、
+      推測は warn フォールバックへ降格。`.engine` プリセットも実 family を宣言可能に
+- [ ] 段階C: 他オープンモデル1本を通して seam が薄いことを実証 → README にレシピ
+- [ ] classifier 側の seam は 2つ目の classifier が出た時に(現状 LampRecognizer 単一なので後回し)
 - [ ] `cli/match.py`(814行)分割・データIFのコード内スキーマ化は**触る時ついで**で対応(単独着手しない)
 
 ### 6. [backlog] 高速化の続き(現状 0.78s/frame で実用十分。必要になったら)

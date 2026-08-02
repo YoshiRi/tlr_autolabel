@@ -1,8 +1,18 @@
 # Model interface design (detector / classifier plug-in)
 
-Status: **proposal** (2026-08-02). Prerequisite for onboarding other open
-models (PLAN.md item 11). No behavior change intended — this is a seam, not a
-rewrite.
+Status: **phase A implemented** (2026-08-02); phases B/C pending. Prerequisite
+for onboarding other open models (PLAN.md item 11). No behavior change — this is
+a seam, not a rewrite.
+
+Phase A shipped: `tlr_autolabel/inference/models/` (registry + `DetectorModel`
+protocol + `yolox`/`comlops` model modules), with `Detector` routed through the
+registry and the output-count guess kept as the fallback. The `.decode` /
+`.preprocess` bodies call the existing functions verbatim, so detector output is
+bit-identical (unit-pinned in `tests/test_detector_models.py`; verified on the
+real GPU onnx and `.engine` paths). Phases B (explicit `detector_type` in
+presets + `--detector-type`) and C (onboard one external model) remain. The
+classifier seam is deferred until a second classifier family appears (only
+LampRecognizer exists today).
 
 ## Problem
 

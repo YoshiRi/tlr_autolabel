@@ -132,8 +132,12 @@ def comlops_decode(outs, mp, score_thr, keep_class_ids):
 
 
 class Detector:
-    """Wraps either detector family behind detect(img, score_thr) -> (dets, scale).
-    dets are in network (letterboxed) pixel space.
+    """Runtime wrapper: owns the onnxruntime session or TensorRT engine, resolves
+    the input size, and exposes detect(img, score_thr) -> (dets, scale) with dets
+    in network (letterboxed) pixel space. The family-specific preprocess/decode
+    live in a DetectorModel from tlr_autolabel.inference.models; this wrapper only
+    picks one (explicit `model_type`, else inferred from the output count) and
+    feeds it batch-squeezed outputs.
 
     Accepts .onnx (onnxruntime, CPU) or .engine (TensorRT via trt_run, GPU).
     Prefer the int8 .engine for the YOLOX detectors when available: the fp32
@@ -141,52 +145,56 @@ class Detector:
     deployed int8 engine does not (verified on frame 00250: 4 FPs at fp32 vs 0
     at int8, with identical true positives on 00000)."""
 
-    def __init__(self, model_path, comlops_param_path):
+    def __init__(self, model_path, comlops_param_path, model_type=None):
+        from tlr_autolabel.inference import models
+
         if model_path.endswith(".engine"):
             self.sess = None
             self.trt = TrtServer(model_path)
             _, _, self.h, self.w = self.in_shape = self.trt.in_shape
-            self.kind = "yolox"  # engine path implemented for yolox only
-            return
-        self.sess = make_session(model_path)
-        self.in_name = self.sess.get_inputs()[0].name
-        in_shape = self.sess.get_inputs()[0].shape
-        if len(in_shape) != 4 or not all(isinstance(d, int) and d > 0 for d in in_shape[2:]):
-            raise SystemExit(
-                f"detector input shape {in_shape} is not a static NCHW image — "
-                "dynamic-dim ONNX exports are not supported; re-export with a "
-                "fixed input size or extend Detector.")
-        _, _, self.h, self.w = in_shape
-        n_out = len(self.sess.get_outputs())
-        if n_out == 1:
-            self.kind = "yolox"
-        elif n_out == 3:
-            self.kind = "comlops"
+            # single-output engine; family cannot be read from the engine, so
+            # trust the preset's model_type and default to yolox (the only
+            # engine-supported family) otherwise.
+            n_out = 1
         else:
+            self.sess = make_session(model_path)
+            self.in_name = self.sess.get_inputs()[0].name
+            in_shape = self.sess.get_inputs()[0].shape
+            if len(in_shape) != 4 or not all(isinstance(d, int) and d > 0 for d in in_shape[2:]):
+                raise SystemExit(
+                    f"detector input shape {in_shape} is not a static NCHW image — "
+                    "dynamic-dim ONNX exports are not supported; re-export with a "
+                    "fixed input size or extend Detector.")
+            _, _, self.h, self.w = in_shape
+            n_out = len(self.sess.get_outputs())
+
+        self.kind = model_type or models.infer_detector_type(n_out)
+        self.model = models.build_detector_model(
+            self.kind, model_path, {"comlops_param_path": comlops_param_path})
+        if self.sess is not None and self.model.num_outputs != n_out:
             raise SystemExit(
-                f"unrecognized detector family: {n_out} outputs "
-                f"({[o.name for o in self.sess.get_outputs()]}). Known: 1 output "
-                "= yolox head, 3 outputs = CoMLOps darknet. New model families "
-                "need a decode added to Detector.")
-        if self.kind == "comlops":
-            self.mp = comlops_load_params(comlops_param_path)
-            self.keep_ids = set()
-            self.labels = self.mp["labels"]
+                f"detector_type={self.kind} expects {self.model.num_outputs} "
+                f"output(s) but the model has {n_out} "
+                f"({[o.name for o in self.sess.get_outputs()]}).")
+        if self.sess is None and not self.model.supports_engine:
+            raise SystemExit(
+                f"detector_type={self.kind} does not support the .engine path; "
+                "use its .onnx export.")
 
     def set_keep_classes(self, names):
-        self.keep_ids = {self.labels.index(n) for n in names}
+        self.model.set_keep_classes(names)
+
+    def _infer(self, blob):
+        """Run inference, returning outputs as a list with the batch dim squeezed
+        (matching what the decode functions expect)."""
+        if self.sess is None:
+            return self.trt.run(blob)  # single-output engine
+        return [o[0] for o in self.sess.run(None, {self.in_name: blob})]
 
     def detect(self, img, score_thr):
-        if self.kind == "yolox":
-            blob, scale = det_preprocess(img, self.w, self.h)
-            if self.sess is None:
-                out = self.trt.run(blob)[0]
-            else:
-                out = self.sess.run(None, {self.in_name: blob})[0][0]
-            return det_decode(out, self.w, self.h, score_thr), scale
-        blob, scale = det_preprocess(img, self.w, self.h, rgb=True, norm=1.0 / 255.0)
-        outs = [o[0] for o in self.sess.run(None, {self.in_name: blob})]
-        return comlops_decode(outs, self.mp, score_thr, self.keep_ids), scale
+        blob, scale = self.model.preprocess(img, self.w, self.h)
+        outputs = self._infer(blob)
+        return self.model.decode(outputs, self.w, self.h, score_thr), scale
 
 
 def det_nms(dets, iou_thr, contain_thr=0.7):
