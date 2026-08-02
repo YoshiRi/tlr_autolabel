@@ -1,0 +1,22 @@
+# Keep the build context small and reproducible. NOTE: models/ is intentionally
+# NOT ignored -- models/traffic_light_lamp_recognizer_comlops.onnx (7.5M) is the
+# checked-in default classifier and must ship in the image.
+.git
+.gitignore
+**/__pycache__/
+*.pyc
+*.pyo
+
+# large local-only artifacts (data/ is ~5G, sample_preview/ ~36M)
+data/
+sample_preview/
+
+# host build output (trt_run is recompiled inside the image)
+build/
+
+# reference-only, not part of the maintained pipeline
+deprecated/
+
+# local GPU venv, if it was created under the tree
+.venv/
+*.engine
