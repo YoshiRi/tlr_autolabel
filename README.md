@@ -321,10 +321,15 @@ required because the system CUDA 12.8 install is missing `libcufft.so.11`.
 
 ### Detector variations
 
-`--detector` accepts two model families; the type is auto-detected from the ONNX
-output count (1 output = YOLOX, 3 outputs = CoMLOps darknet). For YOLOX it also
-accepts the TensorRT int8 `.engine` (run on GPU via the `trt_run` helper,
-compiled from `tools/trt_run.cpp` on first use).
+`--detector` accepts two model families. The family is chosen by `detector_type`
+(`yolox` / `comlops`) from the preset or `--detector-type`; when unset it falls
+back to auto-detecting from the ONNX output count (1 output = YOLOX, 3 outputs =
+CoMLOps darknet) and warns. Set it explicitly for `.engine` detectors, which
+carry no family metadata. Adding a new family is one module under
+`tlr_autolabel/inference/models/` plus a `@register_detector` entry — see
+`docs/model_interface.md`. For YOLOX, `--detector` also accepts the TensorRT
+int8 `.engine` (run on GPU via the `trt_run` helper, compiled from
+`tools/trt_run.cpp` on first use).
 
 **Prefer the int8 `.engine` over the fp32 `.onnx` for the YOLOX detectors.**
 The fp32 ONNX fires high-confidence (0.9+) false positives on motion-blurred

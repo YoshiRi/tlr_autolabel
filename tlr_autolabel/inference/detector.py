@@ -3,6 +3,7 @@ TensorRT engine wrapper, plus tiling/NMS orchestration around them
 (REFACTOR_PLAN.md phase 6). Extracted from tlr_autolabel.py.
 """
 import math
+import warnings
 
 import cv2
 import numpy as np
@@ -168,7 +169,15 @@ class Detector:
             _, _, self.h, self.w = in_shape
             n_out = len(self.sess.get_outputs())
 
-        self.kind = model_type or models.infer_detector_type(n_out)
+        if model_type:
+            self.kind = model_type
+        else:
+            self.kind = models.infer_detector_type(n_out)
+            warnings.warn(
+                f"detector_type not set; inferred {self.kind!r} from {n_out} "
+                "model output(s). Set detector_type in the preset or pass "
+                "--detector-type to make model selection explicit.",
+                stacklevel=2)
         self.model = models.build_detector_model(
             self.kind, model_path, {"comlops_param_path": comlops_param_path})
         if self.sess is not None and self.model.num_outputs != n_out:

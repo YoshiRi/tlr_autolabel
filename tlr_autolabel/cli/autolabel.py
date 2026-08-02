@@ -175,6 +175,9 @@ def main():
                          f"(available: {', '.join(list_presets())})")
     ap.add_argument("--detector", default=None,
                     help="detector model path (.onnx or .engine); overrides the preset's")
+    ap.add_argument("--detector-type", default=None,
+                    help="detector family (e.g. yolox, comlops); overrides the preset "
+                         "and the .onnx output-count auto-detect")
     ap.add_argument("--classifier", default=os.path.join(REPO_ROOT, "models", "traffic_light_lamp_recognizer_comlops.onnx"))
     ap.add_argument("--classifier-param", default=os.path.join(REPO_ROOT, "configs", "model_params", "lamp_recognizer_ml.param.yaml"))
     ap.add_argument("--comlops-param", default=os.path.join(REPO_ROOT, "configs", "model_params", "comlops_large_detector_ml.param.yaml"),
@@ -261,7 +264,7 @@ def main():
             f"classifier param not found: {args.classifier_param}"
             + (f" (from preset {args.preset})" if args.preset else ""))
 
-    detector = Detector(args.detector, args.comlops_param)
+    detector = Detector(args.detector, args.comlops_param, model_type=args.detector_type)
     if detector.kind == "comlops":
         detector.set_keep_classes([s.strip() for s in args.det_classes.split(",") if s.strip()])
 

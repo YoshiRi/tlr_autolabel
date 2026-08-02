@@ -2,4 +2,5 @@
 # Recommended L1 autolabel preset: int8 avoids the fp32 blur FPs; tiles recover
 # small distant signals (native-res crops, +20% detections on the c1af6a38 eval).
 detector: ${TLR_MODEL_ROOT}/traffic_light_detector_testL/yolox-sPlus-opt-Co_MLOps-traffic_light-1920x1280_20260706_best.engine
+detector_type: yolox
 tiles: true

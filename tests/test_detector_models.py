@@ -43,6 +43,24 @@ class RegistryTest(unittest.TestCase):
                          (3, False))
 
 
+class PresetDetectorTypeTest(unittest.TestCase):
+    """Phase B: every shipped preset declares a detector_type that the registry
+    knows. Guards against typos and presets added without the explicit family."""
+
+    def test_all_presets_declare_a_known_detector_type(self):
+        import yaml
+        preset_dir = REPO_ROOT / "configs" / "detectors"
+        presets = sorted(preset_dir.glob("*.yaml"))
+        self.assertTrue(presets, "no detector presets found")
+        known = set(models.list_detectors())
+        for path in presets:
+            data = yaml.safe_load(path.read_text()) or {}
+            self.assertIn("detector_type", data,
+                          f"{path.name} is missing an explicit detector_type")
+            self.assertIn(data["detector_type"], known,
+                          f"{path.name}: unknown detector_type {data['detector_type']!r}")
+
+
 class YoloxWiringTest(unittest.TestCase):
     def test_preprocess_identical_to_legacy(self):
         img = np.random.randint(0, 255, (50, 40, 3), dtype=np.uint8)
