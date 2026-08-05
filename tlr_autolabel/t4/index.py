@@ -1,34 +1,32 @@
 """T4 camera sample_data indexing (REFACTOR_PLAN.md phase 5).
 
-Extracted from match_traffic_lights.py.
+Extracted from match_traffic_lights.py; now backed by the shared
+tlr_autolabel/t4/dataset.py reader.
 """
 from __future__ import annotations
 
-import json
 from pathlib import Path
+
+from tlr_autolabel.t4.dataset import T4Dataset
 
 
 def load_t4_index(root: Path):
-    """Index camera sample_data rows by (channel, filename stem)."""
-    ann = root / "annotation"
-    ego_by_token = {r["token"]: r for r in json.loads((ann / "ego_pose.json").read_text())}
-    calib_by_token = {r["token"]: r for r in json.loads((ann / "calibrated_sensor.json").read_text())}
-    sensor_by_token = {r["token"]: r for r in json.loads((ann / "sensor.json").read_text())}
+    """Index camera sample_data rows by (channel, filename stem).
 
+    Returns the same {"sample_data", "ego_pose", "calib", "channel"} shape
+    as before the T4Dataset migration, so existing callers (map/projection.py's
+    project_traffic_lights) don't need to change.
+    """
+    ds = T4Dataset.load(root)
     frames: dict[tuple[str, str], dict] = {}
     frames_by_token: dict[str, dict] = {}
-    for row in json.loads((ann / "sample_data.json").read_text()):
-        calib = calib_by_token[row["calibrated_sensor_token"]]
-        sensor = sensor_by_token[calib["sensor_token"]]
-        if sensor["modality"] != "camera":
-            continue
-        stem = Path(row["filename"]).stem
+    for frame in ds.camera_frames_by_token.values():
         entry = {
-            "sample_data": row,
-            "ego_pose": ego_by_token[row["ego_pose_token"]],
-            "calib": calib,
-            "channel": sensor["channel"],
+            "sample_data": frame.sample_data,
+            "ego_pose": frame.ego_pose,
+            "calib": frame.calibrated_sensor,
+            "channel": frame.channel,
         }
-        frames[(sensor["channel"], stem)] = entry
-        frames_by_token[row["token"]] = entry
+        frames[(frame.channel, frame.stem)] = entry
+        frames_by_token[frame.token] = entry
     return frames, frames_by_token

@@ -88,6 +88,77 @@ def segment_observations(observations: list[dict]) -> list[dict]:
     return segments
 
 
+def segment_visibility(observations: list[dict]) -> list[dict]:
+    """Contiguous same-visibility runs for one (signal group, camera channel).
+
+    Unlike segment_observations (fused cross-camera state), visibility is
+    inherently per-camera -- a passing vehicle can occlude one camera's view
+    of a signal while another camera sees it fine -- so this segments a
+    single channel's own observation stream.
+    """
+    segments: list[dict] = []
+    for obs in sorted(observations, key=lambda o: o["timestamp"]):
+        visibility = obs["visibility"]
+        if segments and segments[-1]["visibility"] == visibility:
+            cur = segments[-1]
+            cur["end_sample_token"] = obs["sample_token"]
+            cur["end_timestamp"] = obs["timestamp"]
+            cur["sample_tokens"].append(obs["sample_token"])
+            cur["n_frames"] += 1
+            continue
+        segments.append(
+            {
+                "start_sample_token": obs["sample_token"],
+                "end_sample_token": obs["sample_token"],
+                "sample_tokens": [obs["sample_token"]],
+                "start_timestamp": obs["timestamp"],
+                "end_timestamp": obs["timestamp"],
+                "visibility": visibility,
+                "n_frames": 1,
+            }
+        )
+    return segments
+
+
+def visibility_observations_by_channel(
+    annotations: list[dict], row: dict
+) -> dict[str, list[dict]]:
+    by_channel: dict[str, list[dict]] = defaultdict(list)
+    for ann in annotations:
+        if not annotation_matches_group(ann, row):
+            continue
+        timestamp = ann.get("timestamp")
+        if timestamp is None:
+            continue
+        attrs = ann.get("attributes") or {}
+        by_channel[ann.get("channel", "")].append(
+            {
+                "timestamp": timestamp,
+                "sample_token": ann.get("sample_token", ""),
+                "visibility": attrs.get("visibility") or "unknown",
+            }
+        )
+    return by_channel
+
+
+def build_visibility_tracks(
+    annotations: list[dict], rows: list[dict], crop_channels: set[str] | None
+) -> None:
+    """Attach row["visibility_tracks"] = {channel: [segments]} in place.
+
+    Restricted to the same channel set as the crop candidates (crop_channels)
+    so the timeline doesn't grow a track per wide-angle/irrelevant camera.
+    """
+    for row in rows:
+        by_channel = visibility_observations_by_channel(annotations, row)
+        tracks = {}
+        for channel, observations in sorted(by_channel.items()):
+            if crop_channels is not None and channel not in crop_channels:
+                continue
+            tracks[channel] = segment_visibility(observations)
+        row["visibility_tracks"] = tracks
+
+
 def build_rows(series: list[dict]) -> list[dict]:
     grouped: dict[tuple[str, ...], list[dict]] = defaultdict(list)
     for item in series:
@@ -249,17 +320,15 @@ def write_crop(root: Path, ann: dict, crop_path: Path, margin_ratio: float) -> b
 def attach_crop_candidates(
     root: Path,
     rows: list[dict],
-    sidecar_path: Path,
+    annotations: list[dict],
     assets_dir: Path,
     output_dir: Path,
     limit: int,
     margin_ratio: float,
     crop_channels: set[str] | None,
 ) -> int:
-    if limit <= 0 or not sidecar_path.exists():
+    if limit <= 0:
         return 0
-    sidecar = json.loads(sidecar_path.read_text())
-    annotations = sidecar.get("annotations", [])
     total = 0
     for row in rows:
         group_annotations = [
@@ -388,16 +457,22 @@ def main() -> None:
 
     timeseries = json.loads(input_path.read_text())
     rows = build_rows(timeseries.get("series", []))
+    sidecar_annotations = (
+        json.loads(sidecar_path.read_text()).get("annotations", [])
+        if sidecar_path.exists() else []
+    )
+    crop_channels = parse_channels(args.crop_channels)
     n_crops = attach_crop_candidates(
         root,
         rows,
-        sidecar_path,
+        sidecar_annotations,
         assets_dir,
         output_path.parent,
         args.crop_candidates,
         args.crop_margin,
-        parse_channels(args.crop_channels),
+        crop_channels,
     )
+    build_visibility_tracks(sidecar_annotations, rows, crop_channels)
     hidden_segments = 0
     if not args.show_empty_crop_segments:
         rows, hidden_segments = hide_segments_without_crops(rows)
@@ -453,7 +528,8 @@ def main() -> None:
 <style>
   :root { --bg:#f8f8f6; --panel:#ffffff; --ink:#202428; --muted:#626a73;
     --line:#d8dde2; --red:#c7352b; --amber:#d49716; --green:#27824a;
-    --unknown:#9aa3ad; --accent:#2457c5; --bad:#9f2d20; }
+    --unknown:#9aa3ad; --accent:#2457c5; --bad:#9f2d20;
+    --vis-full:#8fb996; --vis-partial:#d49716; --vis-occluded:#c7352b; --vis-unknown:#c3c9cf; }
   body { margin:0; background:var(--bg); color:var(--ink);
     font:13px/1.45 system-ui, -apple-system, Segoe UI, sans-serif; }
   header { position:sticky; top:0; z-index:5; padding:12px 16px;
@@ -476,6 +552,10 @@ def main() -> None:
   .seg.decided { box-shadow:inset 0 -4px 0 rgba(255,255,255,.75); }
   .seg.flagged::before { content:""; position:absolute; left:0; right:0; top:0;
     height:3px; background:#111; opacity:.8; }
+  .visrow { display:flex; align-items:center; min-width:max-content; margin-bottom:3px; }
+  .visrow .rowlabel { font-size:10px; color:var(--muted); padding-left:14px; }
+  .visstrip { position:relative; height:16px; border-left:1px solid var(--line); }
+  .seg.vis { top:2px; height:12px; padding:0; font-size:0; }
   aside { height:calc(100vh - 58px); overflow:auto; position:sticky; top:58px;
     border-left:1px solid var(--line); background:var(--panel); padding:14px; }
   label { display:block; margin:10px 0 4px; color:var(--muted); font-size:12px; }
@@ -510,7 +590,7 @@ def main() -> None:
 <main>
   <section id="chart"></section>
   <aside>
-    <div class="hint">Click a segment, edit the state/status, then add it to the review JSON.</div>
+    <div class="hint">Click a state segment or a per-camera visibility segment, edit it, then add it to the review JSON.</div>
     <label>Signal group</label>
     <div id="selectedGroup" class="mono">none</div>
     <label>Interval</label>
@@ -519,8 +599,19 @@ def main() -> None:
     <div id="cropPanel" class="cropPanel">
       <div class="hint">Select a segment to show representative crops.</div>
     </div>
-    <label for="stateInput">State</label>
-    <input id="stateInput" placeholder="red-circle">
+    <div id="stateField">
+      <label for="stateInput">State</label>
+      <input id="stateInput" placeholder="red-circle">
+    </div>
+    <div id="visibilityField" style="display:none">
+      <label for="visibilityInput">Visibility</label>
+      <select id="visibilityInput">
+        <option value="full">full</option>
+        <option value="partial">partial</option>
+        <option value="occluded">occluded</option>
+        <option value="unknown">unknown</option>
+      </select>
+    </div>
     <label for="statusInput">Review status</label>
     <select id="statusInput">
       <option value="accepted">accepted</option>
@@ -549,10 +640,15 @@ const PX_PER_S = 42;
 const MIN_SEG_W = 5;
 let selected = null;
 let decisions = new Map();
+let visDecisions = new Map();
 let evidenceIndex = 0;
 
 function keyFor(groupId, seg) {
   return `${groupId}|${seg.start_sample_token}|${seg.end_sample_token}`;
+}
+
+function visKeyFor(groupId, channel, seg) {
+  return `${groupId}|${channel}|${seg.start_sample_token}|${seg.end_sample_token}`;
 }
 
 function stateStyle(state) {
@@ -573,13 +669,29 @@ function stateStyle(state) {
   return `background:linear-gradient(90deg,${stops})`;
 }
 
+function visStyle(visibility) {
+  const color = {
+    full: 'var(--vis-full)',
+    partial: 'var(--vis-partial)',
+    occluded: 'var(--vis-occluded)',
+  }[visibility] || 'var(--vis-unknown)';
+  return `background:${color}`;
+}
+
 function loadReview(payload) {
   decisions = new Map();
+  visDecisions = new Map();
   for (const group of payload.groups || []) {
     const gid = group.signal_group_id;
     for (const d of group.decisions || group.segments || []) {
       const k = `${gid}|${d.start_sample_token}|${d.end_sample_token || d.start_sample_token}`;
       decisions.set(k, {...d, signal_group_id: gid});
+    }
+    for (const [channel, segs] of Object.entries(group.visibility_decisions || {})) {
+      for (const d of segs) {
+        const k = `${gid}|${channel}|${d.start_sample_token}|${d.end_sample_token || d.start_sample_token}`;
+        visDecisions.set(k, {...d, signal_group_id: gid, channel});
+      }
     }
   }
 }
@@ -613,14 +725,40 @@ function renderChart() {
     }
     rowEl.appendChild(strip);
     chart.appendChild(rowEl);
+
+    for (const [channel, segs] of Object.entries(row.visibility_tracks || {})) {
+      const visRowEl = document.createElement('div');
+      visRowEl.className = 'visrow';
+      visRowEl.innerHTML = `<div class="rowlabel">${channel} visibility</div>`;
+      const visStrip = document.createElement('div');
+      visStrip.className = 'visstrip';
+      visStrip.style.width = width + 'px';
+      for (const seg of segs) {
+        const left = ((seg.start_timestamp - DATA.t0) / 1e6) * PX_PER_S;
+        const dur = Math.max((seg.end_timestamp - seg.start_timestamp) / 1e6, 0.1);
+        const segEl = document.createElement('div');
+        segEl.className = 'seg vis';
+        if (visDecisions.has(visKeyFor(row.signal_group_id, channel, seg))) segEl.classList.add('decided');
+        segEl.style.left = left + 'px';
+        segEl.style.width = Math.max(dur * PX_PER_S, MIN_SEG_W) + 'px';
+        segEl.setAttribute('style', segEl.getAttribute('style') + ';' + visStyle(seg.visibility));
+        segEl.title = `${channel}: ${seg.visibility}\\nframes=${seg.n_frames}`;
+        segEl.addEventListener('click', () => selectVisSegment(row, channel, seg, segEl));
+        visStrip.appendChild(segEl);
+      }
+      visRowEl.appendChild(visStrip);
+      chart.appendChild(visRowEl);
+    }
   }
 }
 
 function selectSegment(row, seg, el) {
   document.querySelectorAll('.seg.selected').forEach(n => n.classList.remove('selected'));
   el.classList.add('selected');
-  selected = {row, seg};
+  selected = {kind: 'state', row, seg};
   const existing = decisions.get(keyFor(row.signal_group_id, seg));
+  document.getElementById('stateField').style.display = '';
+  document.getElementById('visibilityField').style.display = 'none';
   document.getElementById('selectedGroup').textContent = row.signal_group_id;
   document.getElementById('selectedInterval').textContent =
     `${seg.start_sample_token} .. ${seg.end_sample_token}`;
@@ -629,6 +767,29 @@ function selectSegment(row, seg, el) {
   document.getElementById('noteInput').value = existing?.note || '';
   evidenceIndex = 0;
   renderEvidence(seg);
+}
+
+function selectVisSegment(row, channel, seg, el) {
+  document.querySelectorAll('.seg.selected').forEach(n => n.classList.remove('selected'));
+  el.classList.add('selected');
+  selected = {kind: 'visibility', row, channel, seg};
+  const existing = visDecisions.get(visKeyFor(row.signal_group_id, channel, seg));
+  document.getElementById('stateField').style.display = 'none';
+  document.getElementById('visibilityField').style.display = '';
+  document.getElementById('selectedGroup').textContent = `${row.signal_group_id} (${channel})`;
+  document.getElementById('selectedInterval').textContent =
+    `${seg.start_sample_token} .. ${seg.end_sample_token}`;
+  document.getElementById('visibilityInput').value = existing?.visibility || seg.visibility;
+  document.getElementById('statusInput').value = existing?.review_status || 'fixed';
+  document.getElementById('noteInput').value = existing?.note || '';
+  evidenceIndex = 0;
+  // Visibility segments carry no crops of their own; borrow same-channel
+  // crops from any state segment overlapping this time range for context.
+  const candidates = (row.segments || [])
+    .filter(s => s.start_timestamp <= seg.end_timestamp && s.end_timestamp >= seg.start_timestamp)
+    .flatMap(s => s.candidates || [])
+    .filter(c => c.channel === channel);
+  renderEvidence({...seg, candidates});
 }
 
 function renderEvidence(seg) {
@@ -687,28 +848,50 @@ function renderEvidence(seg) {
 
 function addDecision() {
   if (!selected) return;
-  const {row, seg} = selected;
-  const decision = {
-    start_sample_token: seg.start_sample_token,
-    end_sample_token: seg.end_sample_token,
-    start_timestamp: seg.start_timestamp,
-    end_timestamp: seg.end_timestamp,
-    state: document.getElementById('stateInput').value.trim() || 'unknown',
-    review_status: document.getElementById('statusInput').value,
-    source: 'manual_timeline_review',
-    n_frames: seg.n_frames,
-    flags: seg.flags || [],
-    note: document.getElementById('noteInput').value,
-    signal_group_id: row.signal_group_id,
-  };
-  decisions.set(keyFor(row.signal_group_id, seg), decision);
+  if (selected.kind === 'visibility') {
+    const {row, channel, seg} = selected;
+    const decision = {
+      start_sample_token: seg.start_sample_token,
+      end_sample_token: seg.end_sample_token,
+      start_timestamp: seg.start_timestamp,
+      end_timestamp: seg.end_timestamp,
+      visibility: document.getElementById('visibilityInput').value,
+      review_status: document.getElementById('statusInput').value,
+      source: 'manual_timeline_review',
+      n_frames: seg.n_frames,
+      note: document.getElementById('noteInput').value,
+      signal_group_id: row.signal_group_id,
+      channel,
+    };
+    visDecisions.set(visKeyFor(row.signal_group_id, channel, seg), decision);
+  } else {
+    const {row, seg} = selected;
+    const decision = {
+      start_sample_token: seg.start_sample_token,
+      end_sample_token: seg.end_sample_token,
+      start_timestamp: seg.start_timestamp,
+      end_timestamp: seg.end_timestamp,
+      state: document.getElementById('stateInput').value.trim() || 'unknown',
+      review_status: document.getElementById('statusInput').value,
+      source: 'manual_timeline_review',
+      n_frames: seg.n_frames,
+      flags: seg.flags || [],
+      note: document.getElementById('noteInput').value,
+      signal_group_id: row.signal_group_id,
+    };
+    decisions.set(keyFor(row.signal_group_id, seg), decision);
+  }
   renderDecisionList();
   renderChart();
 }
 
 function clearDecision() {
   if (!selected) return;
-  decisions.delete(keyFor(selected.row.signal_group_id, selected.seg));
+  if (selected.kind === 'visibility') {
+    visDecisions.delete(visKeyFor(selected.row.signal_group_id, selected.channel, selected.seg));
+  } else {
+    decisions.delete(keyFor(selected.row.signal_group_id, selected.seg));
+  }
   renderDecisionList();
   renderChart();
 }
@@ -721,6 +904,7 @@ function buildPayload() {
       member_ways: row.member_ways,
       regulatory_element_ids: row.regulatory_element_ids,
       decisions: [],
+      visibility_decisions: {},
     });
   }
   for (const decision of decisions.values()) {
@@ -730,19 +914,32 @@ function buildPayload() {
     delete clean.signal_group_id;
     group.decisions.push(clean);
   }
+  for (const decision of visDecisions.values()) {
+    const group = byGroup.get(decision.signal_group_id);
+    if (!group) continue;
+    const clean = {...decision};
+    delete clean.signal_group_id;
+    delete clean.channel;
+    (group.visibility_decisions[decision.channel] ||= []).push(clean);
+  }
   return {
     schema_version: 'traffic_signal_re_review/v1',
     source_timeseries: DATA.source_timeseries,
     created_at: new Date().toISOString(),
-    groups: [...byGroup.values()].filter(g => g.decisions.length),
+    groups: [...byGroup.values()].filter(
+      g => g.decisions.length || Object.keys(g.visibility_decisions).length
+    ),
   };
 }
 
 function renderDecisionList() {
   const list = document.getElementById('decisionList');
   const payload = buildPayload();
-  const n = payload.groups.reduce((acc, g) => acc + g.decisions.length, 0);
-  list.innerHTML = `<div class="hint">${n} decisions staged</div>`;
+  const nState = payload.groups.reduce((acc, g) => acc + g.decisions.length, 0);
+  const nVis = payload.groups.reduce(
+    (acc, g) => acc + Object.values(g.visibility_decisions).reduce((a, s) => a + s.length, 0), 0
+  );
+  list.innerHTML = `<div class="hint">${nState} state decisions, ${nVis} visibility decisions staged</div>`;
   for (const group of payload.groups) {
     for (const d of group.decisions) {
       const item = document.createElement('div');
@@ -750,6 +947,15 @@ function renderDecisionList() {
       item.innerHTML = `<b>${group.signal_group_id}</b>${d.review_status}: ${d.state}<br>` +
         `<span class="mono">${d.start_sample_token} .. ${d.end_sample_token}</span>`;
       list.appendChild(item);
+    }
+    for (const [channel, segs] of Object.entries(group.visibility_decisions)) {
+      for (const d of segs) {
+        const item = document.createElement('div');
+        item.className = 'decision';
+        item.innerHTML = `<b>${group.signal_group_id} (${channel})</b>${d.review_status}: ${d.visibility}<br>` +
+          `<span class="mono">${d.start_sample_token} .. ${d.end_sample_token}</span>`;
+        list.appendChild(item);
+      }
     }
   }
 }

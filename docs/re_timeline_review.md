@@ -12,9 +12,16 @@ L1 inference.
 
 | layer | Owns | Does not own |
 |---|---|---|
-| CVAT / A' import | `box2d`, false-positive rejection, `visibility`, `map_traffic_light_id`, local bbox additions | Bulk state propagation across frames |
-| RE timeline review | `state` and `review_status` over a physical signal group/time interval | Geometry, raw detector provenance, map matching |
+| CVAT / A' import | `box2d`, false-positive rejection, per-frame `visibility` fixes, `map_traffic_light_id`, local bbox additions | Bulk state propagation across frames |
+| RE timeline review | `state`/`review_status` over a physical signal group/time interval, and `visibility` over a physical-signal × **camera channel** / time interval | Geometry, raw detector provenance, map matching |
 | L6 evaluation | Reads reviewed A' sidecar / derived GT | Generates or edits GT |
+
+Visibility is a bulk-editable exception to "CVAT owns visibility": a passing
+vehicle occluding one signal for a stretch of frames is exactly the kind of
+repetitive per-frame edit the timeline review exists to avoid. Because
+occlusion is camera-view-dependent (one camera can be blocked while another
+sees the same physical signal fine), visibility segments are tracked and
+applied **per camera channel**, not per physical-signal group like state is.
 
 ## Signal group identity
 
@@ -62,21 +69,39 @@ Schema:
           "flags": ["cross_head_state_disagreement"],
           "note": ""
         }
-      ]
+      ],
+      "visibility_decisions": {
+        "CAM_FRONT": [
+          {
+            "start_sample_token": "...",
+            "end_sample_token": "...",
+            "start_timestamp": 1783325718047571,
+            "end_timestamp": 1783325718947571,
+            "visibility": "occluded",
+            "review_status": "fixed",
+            "source": "manual_timeline_review",
+            "n_frames": 3,
+            "note": "truck passing in front of the signal"
+          }
+        ]
+      }
     }
   ]
 }
 ```
 
 `state` uses the canonical README vocabulary. `scripts/apply_re_review.py` validates
-tokens with the same parser used by CVAT import.
+tokens with the same parser used by CVAT import. `visibility_decisions` is
+optional per group and keyed by camera channel; a group with no visibility
+corrections to make simply omits the key (or leaves it empty), so existing
+`traffic_signal_re_review/v1` files without it remain valid.
 
 ## Application rules
 
 `scripts/apply_re_review.py` reads A' and this review sidecar, then writes a new
 reviewed A' sidecar. It never edits the input file in place.
 
-For an A' annotation, a decision matches when:
+For an A' annotation, a `decisions` entry matches when:
 
 - `timestamp` is inside `[start_timestamp, end_timestamp]`, and
 - `map_traffic_light_id` is in `member_ways`, or the annotation's
@@ -91,9 +116,23 @@ Effect by `review_status`:
 | `rejected` | Set only `review_status=rejected` |
 | `unchecked` | No effect when applying |
 
-The following are preserved: `box2d`, `occluded`, `visibility`,
-`map_traffic_light_id`, `regulatory_element_id`, `raw_state`,
-`detector_score`, `source_type`, and `annotation_uid`.
+A `visibility_decisions[channel]` entry matches the same way, plus the
+annotation's own `channel` must equal the decision's channel. Effect by
+`review_status`:
+
+| status | Effect |
+|---|---|
+| `accepted` / `fixed` | Set `visibility` |
+| `rejected` / `unchecked` | No effect when applying |
+
+State and visibility decisions apply independently -- an annotation can get
+its `state` updated by a group decision and its `visibility` updated by a
+channel decision in the same `apply_re_review.py` run, or either without the
+other.
+
+The following are preserved unless overridden by the rules above: `box2d`,
+`occluded`, `visibility`, `map_traffic_light_id`, `regulatory_element_id`,
+`raw_state`, `detector_score`, `source_type`, and `annotation_uid`.
 
 ## Workflow
 
