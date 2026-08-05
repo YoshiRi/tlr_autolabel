@@ -211,13 +211,21 @@ Useful knobs:
 python3 scripts/render_re_review_timeline.py --dataset-root <dataset> \
   --crop-candidates 8 \
   --crop-margin 1.5 \
-  --crop-channels CAM_FRONT,CAM_FRONT_LEFT,CAM_FRONT_RIGHT \
+  --crop-channels CAM_TRAFFIC_LIGHT_NEAR,CAM_TRAFFIC_LIGHT_FAR \
   --assets-dir build/tl_match/re_review_assets
 ```
 
 The crop contains context around the bbox and draws the bbox in yellow. Clicking
 the crop opens the original full image.
 
-For map/fusion debugging, pass `--crop-channels all` to allow rear cameras too.
-Pass `--show-empty-crop-segments` to keep no-evidence segments visible instead
-of hiding them.
+`--crop-channels` defaults to **`auto`**: every `CAM_*` channel present in the
+sidecar is used, minus explicitly rear-facing ones (`CAM_BACK*`, `CAM_REAR*`) —
+a rear camera cannot see a signal the ego drives toward. t4devkit permits any
+`CAM_*` name, so nothing is hard-coded; a TLR dataset shipping
+`CAM_TRAFFIC_LIGHT_NEAR/FAR` and one shipping `CAM_FRONT*` both work with no
+flag. The channels actually used are printed in the page header.
+
+Pass an explicit comma-separated list to narrow it, `--crop-channels all` to
+disable filtering entirely (includes rear cameras; useful for map/fusion
+debugging), or `--show-empty-crop-segments` to keep no-evidence segments visible
+instead of hiding them.

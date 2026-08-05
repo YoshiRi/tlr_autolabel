@@ -16,7 +16,14 @@ import os
 from collections import Counter, defaultdict
 from pathlib import Path
 
-DEFAULT_CROP_CHANNELS = "CAM_FRONT,CAM_FRONT_LEFT,CAM_FRONT_RIGHT,CAM_FRONT_FAR"
+DEFAULT_CROP_CHANNELS = "auto"
+
+# t4devkit allows any CAM_* channel name, so the usable set is discovered from
+# the data rather than hard-coded (a TLR dataset typically ships
+# CAM_TRAFFIC_LIGHT_NEAR/FAR, not CAM_FRONT*). Only channels that explicitly
+# face backwards are dropped: a rear camera cannot see a signal the ego is
+# driving toward.
+REAR_CHANNEL_MARKERS = {"REAR", "BACK", "BACKWARD"}
 
 
 def id_sort_key(value: str) -> tuple[int, int | str]:
@@ -52,6 +59,32 @@ def parse_channels(value: str) -> set[str] | None:
     if value.strip().lower() in {"all", "*"}:
         return None
     return {v.strip() for v in value.split(",") if v.strip()}
+
+
+def is_rear_channel(channel: str) -> bool:
+    """True for channels that explicitly face backwards (CAM_BACK, CAM_REAR_LEFT...).
+    Matches whole underscore-separated tokens so a name that merely contains the
+    letters (e.g. CAM_BACKUP_FRONT) is not dropped by accident."""
+    return bool(set(str(channel).upper().split("_")) & REAR_CHANNEL_MARKERS)
+
+
+def auto_crop_channels(channels) -> set[str]:
+    """Forward-ish CAM_* channels discovered from the data itself."""
+    return {
+        ch for ch in channels
+        if ch and str(ch).upper().startswith("CAM_") and not is_rear_channel(ch)
+    }
+
+
+def resolve_crop_channels(value: str, available) -> set[str] | None:
+    """Resolve --crop-channels into a concrete set (None = no filtering).
+
+    'auto' (default) discovers CAM_* channels present in the sidecar and drops
+    rear-facing ones; 'all'/'*' disables filtering; anything else is an explicit
+    comma-separated list."""
+    if value.strip().lower() == "auto":
+        return auto_crop_channels(available)
+    return parse_channels(value)
 
 
 def segment_observations(observations: list[dict]) -> list[dict]:
@@ -429,7 +462,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--crop-channels",
         default=DEFAULT_CROP_CHANNELS,
-        help="comma-separated camera channels used for crop candidates; use 'all' for debug",
+        help="camera channels used for crop candidates: 'auto' (default; every "
+             "CAM_* channel found in the sidecar except rear-facing ones), 'all' "
+             "to disable filtering, or an explicit comma-separated list",
     )
     parser.add_argument(
         "--show-empty-crop-segments",
@@ -461,7 +496,13 @@ def main() -> None:
         json.loads(sidecar_path.read_text()).get("annotations", [])
         if sidecar_path.exists() else []
     )
-    crop_channels = parse_channels(args.crop_channels)
+    crop_channels = resolve_crop_channels(
+        args.crop_channels,
+        {a.get("channel") for a in sidecar_annotations if a.get("channel")},
+    )
+    crop_channels_label = (
+        "all" if crop_channels is None else (",".join(sorted(crop_channels)) or "none")
+    )
     n_crops = attach_crop_candidates(
         root,
         rows,
@@ -504,7 +545,7 @@ def main() -> None:
             "t0": min(t_values),
             "t1": max(t_values),
             "source_timeseries": str(args.input),
-            "crop_channels": args.crop_channels,
+            "crop_channels": crop_channels_label,
             "hidden_empty_crop_segments": hidden_segments,
         },
         ensure_ascii=False,
@@ -515,7 +556,7 @@ def main() -> None:
         f"{len(rows)} signal groups &middot; "
         f"{sum(len(r['segments']) for r in rows)} segments &middot; "
         f"{n_crops} crop candidates &middot; "
-        f"crop channels: {html.escape(args.crop_channels)} &middot; "
+        f"crop channels: {html.escape(crop_channels_label)} &middot; "
         + (f"hidden no-evidence segments: {hidden_segments} &middot; " if hidden_segments else "")
         +
         f"flags: {html.escape(flag_summary or 'none')}"
