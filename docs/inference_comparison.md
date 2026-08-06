@@ -136,6 +136,10 @@ detections linked across consecutive frames by IoU:
 and `state_flip_rate` (how often the state changes across such a link). A
 configuration that flickers is worse for downstream review even when its
 per-frame counts look identical to a steadier one.
+Reported as `n/a` when the run was subsampled (`--frame-stride`, or a sparse
+image set): consecutive labels are then seconds apart, nothing links, and the
+raw numbers would read as flicker. The report states the median frame gap
+instead — measured from `frame_index`, so it works for any source.
 
 **Pairwise against a reference** — box agreement (Jaccard of IoU-matched
 detections), matched-IoU percentiles, state agreement (also excluding
@@ -153,6 +157,13 @@ as evidence of accuracy.
 
 **Grids** — the N most-disagreeing frames rendered as one panel per
 configuration, plus an optional side-by-side mp4. Usually the actual deliverable.
+Boxes and labels are drawn *after* the panel resize, so they stay legible when a
+2880 px frame is fitted into an 800 px panel. A traffic light is a fraction of a
+percent of that frame, so `--grid-crop` crops each panel to the union of *all*
+configurations' detections (a box only one of them found is still inside), and
+`--grid-width` trades file size for detail. When the configurations agree
+everywhere, the grids fall back to an evenly spaced sample — "nothing to show" is
+the wrong answer to "show me the output".
 
 ### What it cannot say
 
@@ -164,6 +175,10 @@ distant signals. Use this harness to locate differences; use `compare_runs.py`
 which difference is an improvement.
 
 ## Usage
+
+`--frame-stride` / `--max-frames` apply to every input kind (per topic for a bag,
+per camera for a T4 dataset), so a trial run is cheap before committing to a full
+pass.
 
 ```bash
 # a directory of images, two presets, compare right away
@@ -194,6 +209,13 @@ python3 scripts/compare_naive.py old=./labels_old new=./labels_new --out build/c
 
 On GPU, put `run_gpu.sh`'s environment around the runner the same way
 `run_dataset.py` does for L1 (the engines path needs the venv's CUDA libs).
+
+Verified end to end on 2026-08-07 with the real Autoware model-store stack
+(`autoware-mlmodels-960-onnx`, CPU onnxruntime) over a T4 dataset: two
+thresholds × 4 frames of `CAM_TRAFFIC_LIGHT_NEAR`, giving Tier A with
+`sample_data_token` intact, `timing_ms` around 0.7-0.8 s/frame on CPU, a full
+agreement report, and legible cropped grids. The `.engine` + `--bag` paths have
+unit coverage but have not been run on real hardware/bags yet (PLAN item 12).
 
 ## Extending
 

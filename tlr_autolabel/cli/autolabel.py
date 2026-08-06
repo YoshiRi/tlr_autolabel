@@ -86,27 +86,31 @@ def add_frame_source_args(ap):
     ap.add_argument("--channels", default=None,
                     help="with --t4-dataset: comma-separated camera channels (default: all)")
     ap.add_argument("--frame-stride", type=int, default=1,
-                    help="keep every Nth frame of a video/bag (default: 1)")
+                    help="keep every Nth frame (default: 1); applies to every "
+                         "input kind")
     ap.add_argument("--frame-start", type=int, default=0,
                     help="first video frame number to read")
     ap.add_argument("--max-frames", type=int, default=None,
-                    help="stop after N frames (per topic for a bag)")
+                    help="stop after N frames (per topic for a bag, per camera "
+                         "for a T4 dataset) — handy for a quick trial run")
 
 
 def frame_source_spec(args, *, prefer_t4_source=False):
     """Map the input flags onto a `build_frame_source` spec."""
+    subsample = {"stride": args.frame_stride, "max_frames": args.max_frames}
     if args.video:
-        return {"kind": "video", "uri": args.video, "stride": args.frame_stride,
-                "start": args.frame_start, "max_frames": args.max_frames}
+        return {"kind": "video", "uri": args.video, "start": args.frame_start,
+                **subsample}
     if args.bag:
         return {"kind": "rosbag", "uri": args.bag, "topics": args.bag_topics,
-                "stride": args.frame_stride, "max_frames": args.max_frames}
+                **subsample}
     if prefer_t4_source and args.t4_dataset and not getattr(args, "image", None):
-        return {"kind": "t4", "root": args.t4_dataset, "channels": args.channels}
+        return {"kind": "t4", "root": args.t4_dataset, "channels": args.channels,
+                **subsample}
     if not getattr(args, "image", None):
         raise SystemExit("no input: pass an image/directory, --video, --bag, or --t4-dataset")
     return {"kind": "images", "path": args.image, "image_root": args.image_root,
-            "t4_dataset": args.t4_dataset}
+            "t4_dataset": args.t4_dataset, **subsample}
 
 
 def main():

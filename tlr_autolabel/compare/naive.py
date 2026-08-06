@@ -198,20 +198,30 @@ def stability(run: Run, iou_thr=STABILITY_IOU_THR) -> dict:
     identical to a steadier one."""
     links = flips = 0
     pair_matched = pair_possible = 0
+    gaps = []
     for _channel, recs in frames_in_order(run):
         for prev, cur in zip(recs, recs[1:]):
             pairs, _un_prev, _un_cur = match_frame(prev["signals"], cur["signals"], iou_thr)
             pair_matched += len(pairs)
             pair_possible += max(len(prev["signals"]), len(cur["signals"]))
+            if prev.get("frame_index") is not None and cur.get("frame_index") is not None:
+                gaps.append(cur["frame_index"] - prev["frame_index"])
             for pi, ci, _v in pairs:
                 links += 1
                 if prev["signals"][pi]["state"] != cur["signals"][ci]["state"]:
                     flips += 1
+    gaps.sort()
+    # A subsampled run (--frame-stride, or a sparse image set) has no temporal
+    # continuity to measure: consecutive labels are seconds apart, so nothing
+    # links and the numbers below would read as flicker. Say so instead.
+    median_gap = gaps[len(gaps) // 2] if gaps else None
     return {
         "frame_pairs_compared": pair_possible,
         "frame_to_frame_match_rate": div(pair_matched, pair_possible),
         "tracked_links": links,
         "state_flip_rate": div(flips, links),
+        "median_frame_gap": median_gap,
+        "meaningful": bool(gaps) and median_gap == 1,
     }
 
 
@@ -412,15 +422,26 @@ def write_markdown(report: dict, path) -> str:
         "box p50 (px) | ms p50 | f2f match | state flips |",
         "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
     ]
+    subsampled = False
     for n in names:
         r = runs[n]
         st = r["stability"]
+        if st.get("meaningful"):
+            f2f, flips = _fmt(st["frame_to_frame_match_rate"]), _fmt(st["state_flip_rate"])
+        else:
+            subsampled = True
+            f2f = flips = "n/a"
         lines.append(
             f"| {n} | {r['frames']} | {r['detections']} | "
             f"{_fmt(r['detections_per_frame'])} | {_fmt(r['unknown_rate'])} | "
             f"{_fmt(r['detector_score']['p50'])} | {_fmt(r['box_min_side_px']['p50'])} | "
-            f"{_fmt(r['timing_ms']['total']['p50'])} | "
-            f"{_fmt(st['frame_to_frame_match_rate'])} | {_fmt(st['state_flip_rate'])} |")
+            f"{_fmt(r['timing_ms']['total']['p50'])} | {f2f} | {flips} |")
+    if subsampled:
+        gap = runs[names[0]]["stability"].get("median_frame_gap")
+        lines += ["", f"> Stability is `n/a`: consecutive labels are {gap or '?'} "
+                      "source frames apart, so there is no temporal continuity to "
+                      "measure. Re-run without `--frame-stride` on a contiguous "
+                      "stretch to get it."]
 
     lines += ["", "## Models", "",
               "| config | preset | detector | type | tiles | score thr | classifier |",
@@ -496,11 +517,22 @@ def write_markdown(report: dict, path) -> str:
     return text
 
 
-def worst_frames(report: dict, limit=20) -> list:
+def worst_frames(report: dict, limit=20, runs=None) -> list:
     """Frame keys ranked by total disagreement across all pairs — what to look
-    at first, and what the grid renderer draws."""
+    at first, and what the grid renderer draws.
+
+    When the configurations agree everywhere (or there is only one), fall back to
+    an evenly spaced sample: "nothing to show" is the wrong answer to "show me
+    the output", and agreement is itself worth eyeballing once."""
     totals = Counter()
     for pair in report["pairwise"]:
         for row in pair["worst_frames"]:
             totals[row["frame_key"]] += row["disagreements"]
-    return [k for k, _n in totals.most_common(limit)]
+    keys = [k for k, _n in totals.most_common(limit)]
+    if keys or not runs or limit <= 0:
+        return keys
+    common = sorted(set.intersection(*(set(r.frames) for r in runs)))
+    if not common:
+        return []
+    step = max(1, len(common) // limit)
+    return common[::step][:limit]

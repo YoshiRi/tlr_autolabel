@@ -78,6 +78,19 @@ class ImageDirSourceTest(unittest.TestCase):
             self.assertEqual([f.frame_id for f in frames], ["00001"])
             self.assertEqual(asked, ["00000", "00001"])
 
+    def test_stride_and_max_frames_keep_ids_stable(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for i in range(6):
+                write_image(root / f"{i:05d}.png")
+            frames = list(ImageDirSource(path=str(root), stride=2))
+            self.assertEqual([f.frame_id for f in frames],
+                             ["00000", "00002", "00004"])
+            self.assertEqual([f.frame_index for f in frames], [0, 2, 4],
+                             "frame_index still refers to the full list")
+            frames = list(ImageDirSource(path=str(root), max_frames=2))
+            self.assertEqual([f.frame_id for f in frames], ["00000", "00001"])
+
     def test_unreadable_file_is_skipped_not_fatal(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -189,6 +202,15 @@ class T4SourceTest(unittest.TestCase):
             self.assertEqual(frames[0].channel, "CAM_FRONT")
             self.assertEqual(frames[0].timestamp_us, 1000)
             self.assertEqual(frames[0].rel_path, "data/CAM_FRONT/00000.png")
+
+    def test_max_frames_is_per_camera(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._dataset(root)
+            frames = list(T4DatasetSource(root=str(root), max_frames=1))
+            self.assertEqual([f.frame_id for f in frames],
+                             ["CAM_FRONT/00000", "CAM_FRONT_FAR/00000"],
+                             "one frame of each camera, not one frame in total")
 
     def test_single_channel_keeps_plain_frame_ids(self):
         with tempfile.TemporaryDirectory() as tmp:

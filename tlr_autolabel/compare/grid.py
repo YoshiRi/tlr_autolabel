@@ -46,10 +46,18 @@ def resolve_image(record, image_root=None):
     return None
 
 
-def draw_panel(img, signals, title, box_thickness=2):
+def draw_panel(img, signals, title, scale=1.0, offset=(0, 0), box_thickness=2):
+    """Draw boxes + labels on an already-resized panel.
+
+    Boxes arrive in original image pixels; `scale`/`offset` map them onto the
+    panel. Drawing after the resize (not before) is load-bearing: a 2880 px frame
+    shrunk into an 800 px panel would otherwise reduce a 0.45-scale label and a
+    2 px box to unreadable smudges."""
     vis = img.copy()
+    ox, oy = offset
     for s in signals:
-        x0, y0, x1, y1 = [int(round(v)) for v in s["box"]]
+        x0, y0, x1, y1 = [int(round((v - o) * scale))
+                          for v, o in zip(s["box"], (ox, oy, ox, oy))]
         color = color_for_state(s.get("state"))
         cv2.rectangle(vis, (x0, y0), (x1, y1), color, box_thickness)
         score = s.get("score")
@@ -60,12 +68,41 @@ def draw_panel(img, signals, title, box_thickness=2):
         cv2.putText(vis, label, (x0, ty), cv2.FONT_HERSHEY_SIMPLEX, 0.45,
                     color, 1, cv2.LINE_AA)
     header = np.full((HEADER_H, vis.shape[1], 3), 25, dtype=np.uint8)
-    cv2.putText(header, title, (6, HEADER_H - 8), cv2.FONT_HERSHEY_SIMPLEX, 0.55,
+    cv2.putText(header, title, (6, HEADER_H - 8), cv2.FONT_HERSHEY_SIMPLEX, 0.5,
                 (240, 240, 240), 1, cv2.LINE_AA)
     return np.vstack([header, vis])
 
 
-def render_frame_grid(runs, frame_key, image_root=None, width=1600, columns=None):
+def detection_crop(present, shape, pad_ratio=1.5, min_size=320):
+    """Region covering every configuration's detections, padded.
+
+    Traffic lights are a fraction of a percent of a 2880x1860 frame; a
+    full-frame panel shows the difference between two configurations as a few
+    pixels. The crop is the union over *all* configurations, so a box only one
+    of them found is inside it."""
+    boxes = [s["box"] for _n, rec in present for s in rec["signals"]]
+    if not boxes:
+        return None
+    h, w = shape[:2]
+    x0 = min(b[0] for b in boxes)
+    y0 = min(b[1] for b in boxes)
+    x1 = max(b[2] for b in boxes)
+    y1 = max(b[3] for b in boxes)
+    cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
+    half_w = max(min_size / 2, (x1 - x0) * (1 + pad_ratio) / 2)
+    half_h = max(min_size / 2, (y1 - y0) * (1 + pad_ratio) / 2)
+    # keep the panel aspect close to the frame's so the mosaic stays regular
+    half_h = max(half_h, half_w * h / w / 2)
+    half_w = max(half_w, half_h * w / h / 2)
+    cx0 = int(max(0, min(w - 1, cx - half_w)))
+    cy0 = int(max(0, min(h - 1, cy - half_h)))
+    cx1 = int(max(cx0 + 1, min(w, cx + half_w)))
+    cy1 = int(max(cy0 + 1, min(h, cy + half_h)))
+    return cx0, cy0, cx1, cy1
+
+
+def render_frame_grid(runs, frame_key, image_root=None, width=1600, columns=None,
+                      crop=False):
     """One image with a panel per run. None when the frame image is unavailable."""
     records = [(run.name, run.frames.get(frame_key)) for run in runs]
     present = [(n, r) for n, r in records if r]
@@ -79,16 +116,23 @@ def render_frame_grid(runs, frame_key, image_root=None, width=1600, columns=None
     if img is None:
         return None
 
+    offset = (0, 0)
+    region = detection_crop(present, img.shape) if crop else None
+    if region:
+        cx0, cy0, cx1, cy1 = region
+        img = img[cy0:cy1, cx0:cx1]
+        offset = (cx0, cy0)
+
     columns = columns or (2 if len(present) > 2 else len(present))
     rows = math.ceil(len(present) / columns)
     panel_w = max(1, width // columns)
     scale = panel_w / img.shape[1]
+    resized = cv2.resize(img, (panel_w, max(1, int(round(img.shape[0] * scale)))))
     panels = []
     for name, rec in present:
         signals = rec["signals"]
-        title = f"{name}  |  {frame_key}  |  {len(signals)} det"
-        panel = draw_panel(img, signals, title)
-        panels.append(cv2.resize(panel, (panel_w, int(round(panel.shape[0] * scale)))))
+        title = f"{name} | {frame_key} | {len(signals)} det"
+        panels.append(draw_panel(resized, signals, title, scale=scale, offset=offset))
     blank = np.zeros_like(panels[0])
     while len(panels) < rows * columns:
         panels.append(blank)
@@ -97,12 +141,12 @@ def render_frame_grid(runs, frame_key, image_root=None, width=1600, columns=None
 
 
 def render_grids(runs, frame_keys, out_dir, image_root=None, width=1600,
-                 columns=None) -> list:
+                 columns=None, crop=False) -> list:
     os.makedirs(out_dir, exist_ok=True)
     written = []
     for key in frame_keys:
         grid = render_frame_grid(runs, key, image_root=image_root, width=width,
-                                 columns=columns)
+                                 columns=columns, crop=crop)
         if grid is None:
             continue
         path = os.path.join(out_dir, key.replace(os.sep, "_") + ".grid.png")
@@ -112,13 +156,16 @@ def render_grids(runs, frame_keys, out_dir, image_root=None, width=1600,
 
 
 def render_grid_video(runs, frame_keys, out_path, image_root=None, width=1600,
-                      columns=None, fps=10) -> str | None:
-    """Encode the grids as an mp4 (needs ffmpeg). Returns None if nothing rendered."""
+                      columns=None, crop=False, fps=10) -> str | None:
+    """Encode the grids as an mp4 (needs ffmpeg). Returns None if nothing rendered.
+
+    Panels must all come out the same size for the encoder, so cropping is not
+    applied here even when asked for."""
     with tempfile.TemporaryDirectory(prefix="tlr_grid_") as tmp:
         n = 0
         for key in frame_keys:
             grid = render_frame_grid(runs, key, image_root=image_root, width=width,
-                                     columns=columns)
+                                     columns=columns, crop=False)
             if grid is None:
                 continue
             cv2.imwrite(os.path.join(tmp, f"{n:06d}.png"), grid)

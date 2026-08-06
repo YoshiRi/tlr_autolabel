@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import os
+from collections import defaultdict
 from dataclasses import dataclass, field
 
 import cv2
@@ -50,11 +51,15 @@ def camera_sample_data(dataset_root: str, channels=None) -> list[dict]:
 class T4DatasetSource(FrameSource):
     root: str = ""
     channels: list[str] | None = None
+    stride: int = 1
+    max_frames: int | None = None            # per channel
     kind: str = field(default="t4", init=False)
 
     def __post_init__(self):
         if not self.root:
             raise SystemExit("t4 source: 'root' is required")
+        if self.stride < 1:
+            raise SystemExit(f"t4 source: stride must be >= 1, got {self.stride}")
         if isinstance(self.channels, str):
             self.channels = [c.strip() for c in self.channels.split(",") if c.strip()]
         self.root = os.path.realpath(os.path.expanduser(self.root))
@@ -67,17 +72,30 @@ class T4DatasetSource(FrameSource):
         return len(self.rows)
 
     def iter_frames(self, skip=None):
+        # subsampling is per channel, so `--max-frames 5` on a 6-camera dataset
+        # gives 5 frames of each camera rather than 5 frames of the first one
+        seen = defaultdict(int)
+        emitted = defaultdict(int)
         for seq, sd in enumerate(self.rows):
+            channel = sd["channel"]
+            index = seen[channel]
+            seen[channel] += 1
+            if index % self.stride:
+                continue
+            if self.max_frames is not None and emitted[channel] >= self.max_frames:
+                continue
             rel = sd["filename"]
             stem = os.path.splitext(os.path.basename(rel))[0]
-            frame_id = f"{sd['channel']}/{stem}" if self.multi_channel else stem
+            frame_id = f"{channel}/{stem}" if self.multi_channel else stem
             if skip is not None and skip(frame_id):
+                emitted[channel] += 1
                 continue
             path = os.path.join(self.root, rel)
             img = cv2.imread(path)
             if img is None:
                 print(f"[skip] {path}")
                 continue
+            emitted[channel] += 1
             yield Frame(
                 frame_id=frame_id,
                 frame_index=frame_index_of(stem, seq),
@@ -92,4 +110,5 @@ class T4DatasetSource(FrameSource):
     def describe(self) -> dict:
         return {"kind": self.kind, "uri": self.root,
                 "channels": sorted({r["channel"] for r in self.rows}),
-                "frames": len(self.rows)}
+                "frames": len(self.rows), "stride": self.stride,
+                "max_frames": self.max_frames}

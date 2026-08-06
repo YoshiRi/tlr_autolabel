@@ -96,6 +96,11 @@ def run_compare_main():
     ap.add_argument("--iou-thr", type=float, default=naive.DEFAULT_IOU_THR)
     ap.add_argument("--grid-top", type=int, default=12,
                     help="with --compare: render N most-disagreeing frames side by side")
+    ap.add_argument("--grid-width", type=int, default=1600,
+                    help="total width of a side-by-side grid image")
+    ap.add_argument("--grid-crop", action="store_true",
+                    help="crop grids to the union of all detections — traffic "
+                         "lights are tiny in a full frame")
     args = ap.parse_args()
 
     if args.matrix:
@@ -117,7 +122,8 @@ def run_compare_main():
     if args.compare:
         runs = naive.load_runs_from_manifest(os.path.join(args.out, "run_manifest.json"))
         _report(runs, args.out, reference=args.reference, iou_thr=args.iou_thr,
-                grid_top=args.grid_top,
+                grid_top=args.grid_top, grid_width=args.grid_width,
+                grid_crop=args.grid_crop,
                 image_root=os.path.join(args.out, manifest["frames_dir"])
                 if manifest.get("frames_dir") else None)
 
@@ -126,7 +132,8 @@ def run_compare_main():
 
 
 def _report(runs, out_dir, reference=None, iou_thr=naive.DEFAULT_IOU_THR,
-            grid_top=12, image_root=None, with_consensus=True, grid_video=None):
+            grid_top=12, image_root=None, with_consensus=True, grid_video=None,
+            grid_width=1600, grid_crop=False):
     report = naive.compare(runs, reference=reference, iou_thr=iou_thr,
                            with_consensus=with_consensus)
     out = Path(out_dir)
@@ -135,15 +142,20 @@ def _report(runs, out_dir, reference=None, iou_thr=naive.DEFAULT_IOU_THR,
     json_path.write_text(json.dumps(report, indent=2, ensure_ascii=False))
     text = naive.write_markdown(report, out / "compare_naive.md")
     print(text)
-    keys = naive.worst_frames(report, limit=grid_top)
+    keys = naive.worst_frames(report, limit=grid_top, runs=runs)
     if grid_top and keys:
         written = grid_mod.render_grids(runs, keys, str(out / "grids"),
-                                       image_root=image_root)
-        print(f"wrote {len(written)} side-by-side grids -> {out / 'grids'}")
+                                        image_root=image_root, width=grid_width,
+                                        crop=grid_crop)
+        if written:
+            print(f"wrote {len(written)} side-by-side grids -> {out / 'grids'}")
+        else:
+            print("no grids written: the frame images could not be resolved "
+                  "(pass --image-root pointing at the frames)")
     if grid_video:
         order = sorted(set().union(*(set(r.frames) for r in runs)))
         path = grid_mod.render_grid_video(runs, order, grid_video,
-                                          image_root=image_root)
+                                          image_root=image_root, width=grid_width)
         if path:
             print(f"wrote {path}")
     print(f"wrote {json_path} and {out / 'compare_naive.md'}")
@@ -169,6 +181,11 @@ def compare_naive_main():
                     help="skip the majority-vote pseudo reference")
     ap.add_argument("--grid-top", type=int, default=12,
                     help="render the N most-disagreeing frames side by side (0: none)")
+    ap.add_argument("--grid-width", type=int, default=1600,
+                    help="total width of a side-by-side grid image")
+    ap.add_argument("--grid-crop", action="store_true",
+                    help="crop grids to the union of all detections — traffic "
+                         "lights are tiny in a full frame")
     ap.add_argument("--grid-video", default=None,
                     help="also encode every frame as a side-by-side mp4 (needs ffmpeg)")
     ap.add_argument("--image-root", default=None,
@@ -193,4 +210,5 @@ def compare_naive_main():
 
     _report(runs, out_dir, reference=args.reference, iou_thr=args.iou_thr,
             grid_top=args.grid_top, image_root=image_root,
-            with_consensus=not args.no_consensus, grid_video=args.grid_video)
+            with_consensus=not args.no_consensus, grid_video=args.grid_video,
+            grid_width=args.grid_width, grid_crop=args.grid_crop)

@@ -415,8 +415,16 @@ autolabelingで再現可能に選べるようにする。出力IFは既存
       グリッド → video展開経路まで通す(全体 143/143)
 - 用途の限定: **差分の所在の可視化**であって順位付けではない(PLAN 2.8/2.9 の
   「S960>L1920 は広角固有」の教訓)。順位は地図参照 `compare_runs.py` か GT 評価で
-- [ ] 実機(GPU + 実モデル + 実 bag)での試走はユーザー環境で未実施 —
-      `run_gpu.sh` 相当の環境で `--matrix configs/compare/detector-matrix.yaml` を回す
+- [x] **実モデルでの疎通確認**(2026-08-07): Autoware model-store 実モデル
+      (`autoware-mlmodels-960-onnx`、CPU onnxruntime)で T4 dataset の
+      CAM_TRAFFIC_LIGHT_NEAR 4frame × 2閾値を実走。Tier A(sample_data_token 付き)、
+      timing 0.7-0.8s/frame、一致レポート、crop付きグリッドまで確認
+- [ ] **`.engine` + 実 bag** はユーザー環境で未実施 — `run_gpu.sh` 相当の環境で
+      `--matrix configs/compare/detector-matrix.yaml`、`--bag` は ROS 2 source 済み環境で
+- [x] 実走で判明した2点を修正: ①strideした run の安定性指標は `n/a` 表示
+      (frame_index の中央ギャップを併記。0.0 だと「フリッカー」と誤読される)
+      ②グリッドの箱/ラベルは panel リサイズ**後**に描画(2880px→800px で潰れていた)。
+      信号は画面比が極小なので `--grid-crop`(全構成の検出の和領域)と `--grid-width` を追加
 - [ ] 余地: 距離ビン別の比較は地図が必要なので `compare_runs.py` 側に接続する
       (naive 比較は地図なし前提のまま)
 - [ ] `cli/match.py`(814行)分割・データIFのコード内スキーマ化は**触る時ついで**で対応(単独着手しない)

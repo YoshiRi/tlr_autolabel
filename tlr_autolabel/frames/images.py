@@ -53,11 +53,15 @@ class ImageDirSource(FrameSource):
     path: str = ""
     image_root: str | None = None
     t4_dataset: str | None = None
+    stride: int = 1
+    max_frames: int | None = None
     kind: str = field(default="images", init=False)
 
     def __post_init__(self):
         if not self.path:
             raise SystemExit("images source: 'path' is required")
+        if self.stride < 1:
+            raise SystemExit(f"images source: stride must be >= 1, got {self.stride}")
         self.path = os.path.expanduser(self.path)
         is_dir = os.path.isdir(self.path)
         if is_dir:
@@ -80,9 +84,17 @@ class ImageDirSource(FrameSource):
         return len(self.paths)
 
     def iter_frames(self, skip=None):
+        emitted = 0
         for seq, p in enumerate(self.paths):
+            # `seq` stays the position in the full list, so `frame_index` and the
+            # frame ids do not move when a run subsamples
+            if seq % self.stride:
+                continue
+            if self.max_frames is not None and emitted >= self.max_frames:
+                break
             stem = os.path.splitext(os.path.basename(p))[0]
             if skip is not None and skip(stem):
+                emitted += 1
                 continue
             img = cv2.imread(p)
             if img is None:
@@ -91,6 +103,7 @@ class ImageDirSource(FrameSource):
             rp = os.path.realpath(p)
             rel = os.path.relpath(rp, self.root)
             sd = self.t4map.get(rp)
+            emitted += 1
             yield Frame(
                 frame_id=stem,
                 frame_index=frame_index_of(stem, seq),
@@ -103,7 +116,8 @@ class ImageDirSource(FrameSource):
 
     def describe(self) -> dict:
         return {"kind": self.kind, "uri": self.path, "image_root": self.root,
-                "frames": len(self.paths)}
+                "frames": len(self.paths), "stride": self.stride,
+                "max_frames": self.max_frames}
 
 
 @dataclass

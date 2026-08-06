@@ -366,6 +366,73 @@ combos:
         self.assertEqual(len(written), 1)
 
 
+class SubsampledRunTest(HarnessTestCase):
+    """A strided run has no temporal continuity; the report must say so instead
+    of showing a 0.0 match rate that reads as flicker."""
+
+    def test_stability_is_marked_not_meaningful(self):
+        out, _ = self.run_matrix()
+        for name in ("narrow", "wide"):
+            for i, path in enumerate(sorted((out / "labels" / name).glob("*.json"))):
+                payload = json.loads(path.read_text())
+                payload["frame_index"] = i * 100        # as --frame-stride 100 would
+                path.write_text(json.dumps(payload))
+        runs = naive.load_runs_from_manifest(out / "run_manifest.json")
+        report = naive.compare(runs, reference="narrow")
+        st = report["runs"]["narrow"]["stability"]
+        self.assertFalse(st["meaningful"])
+        self.assertEqual(st["median_frame_gap"], 100)
+        text = naive.write_markdown(report, out / "sub.md")
+        self.assertIn("Stability is `n/a`", text)
+        self.assertIn("100 source frames apart", text)
+
+
+class GridFallbackTest(HarnessTestCase):
+    def test_agreeing_runs_still_get_grids(self):
+        out, _ = self.run_matrix()
+        runs = naive.load_runs_from_manifest(out / "run_manifest.json")
+        # make the two runs identical so there is nothing to rank by disagreement
+        for rec in runs[1].frames.values():
+            rec["signals"] = [dict(s) for s in runs[0].frames[rec["frame_key"]]["signals"]]
+        report = naive.compare(runs, reference=runs[0].name)
+        self.assertEqual(report["pairwise"][0]["box_agreement"], 1.0)
+        keys = naive.worst_frames(report, limit=2, runs=runs)
+        self.assertEqual(len(keys), 2, "fall back to a sample when nothing disagrees")
+        self.assertEqual(naive.worst_frames(report, limit=2), [],
+                         "without runs there is nothing to fall back to")
+
+    def test_crop_uses_the_union_over_all_configs(self):
+        out, _ = self.run_matrix()
+        runs = naive.load_runs_from_manifest(out / "run_manifest.json")
+        present = [(r.name, r.frames["00000"]) for r in runs]
+        region = grid_mod.detection_crop(present, (100, 100, 3), min_size=10)
+        x0, y0, x1, y1 = region
+        # wide's extra box at (60,60)-(80,80) must be inside the crop
+        self.assertLessEqual(x0, 60)
+        self.assertGreaterEqual(x1, 80)
+        self.assertLessEqual(y0, 60)
+        self.assertGreaterEqual(y1, 80)
+        for _name, rec in present:
+            rec["signals"] = []
+        self.assertIsNone(grid_mod.detection_crop(present, (100, 100, 3)),
+                          "no detections, no crop")
+
+    def test_labels_are_drawn_at_panel_scale(self):
+        out, _ = self.run_matrix()
+        runs = naive.load_runs_from_manifest(out / "run_manifest.json")
+        grid = grid_mod.render_frame_grid(runs, "00000", width=400)
+        self.assertIsNotNone(grid)
+        self.assertEqual(grid.shape[1], 400, "two 200px panels")
+        # the box lives at 10..30 of a 100px frame -> 20..60 of a 200px panel;
+        # sample a row through its middle, below the label text
+        panel = grid[grid_mod.HEADER_H:, :200]
+        row = panel[40]
+        red = ((row[:, 2] > 200) & (row[:, 0] < 80)).nonzero()[0]
+        self.assertTrue(len(red), "the box edges should be drawn in the panel")
+        self.assertLess(abs(red.min() - 20), 6, "left edge scaled to the panel")
+        self.assertLess(abs(red.max() - 60), 6, "right edge scaled to the panel")
+
+
 class MissingFramesTest(HarnessTestCase):
     def test_uneven_frame_sets_are_reported(self):
         out, _ = self.run_matrix()
