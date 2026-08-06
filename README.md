@@ -33,22 +33,24 @@ lanelet2 traffic-light IDs.
 
 | layer | role | input -> output | where |
 |-------|------|-----------------|-------|
-| **L1 inference** | detect + classify signals on an image directory | images -> Tier A (`tlr_autolabel/v1` per-frame JSON) | `scripts/tlr_autolabel.py` |
+| **L1 inference** | detect + classify signals over a frame source (image dir, video, rosbag, T4 dataset) | frames -> Tier A (`tlr_autolabel/v1` per-frame JSON) | `scripts/tlr_autolabel.py`, `scripts/run_compare.py` (N configurations at once) |
 | **L2 standardize (A→B)** | convert autolabel to standard t4dataset annotation: bbox + db_tlr `category` + `occlusion`/`truncation` attributes + 2D `instance`; map-signal identity belongs to t4devkit-defined `traffic_light.json` for B' | Tier A (or A') -> Tier B (`object_ann.json` + `category`/`attribute`/`instance`) [+ `traffic_light.json` for B'] | `scripts/to_object_ann.py` |
 | **L3 map enrichment (A→A')** | map association (lanelet2 way + RE group) + multi-camera/head fusion; an **internal** enrichment used for review/QA and to fill B' | Tier A + T4 map -> Tier A' (`traffic_signal_2d/v2` sidecar) + `traffic_signal_re/v1` | `scripts/match_traffic_lights.py`, `scripts/aggregate_regulatory_signals.py`, `scripts/render_re_timeline.py` |
 | **L4 review UI** | human correction that turns provisional A' into reviewed GT: per-frame box / state / visibility / map id (CVAT), and RE state-intervals (timeline); reviewed A' can then be standardized to B/B' | Tier A' -> reviewed A' -> Tier B/B' | CVAT pair (`scripts/export_cvat_signal_task.py`/`scripts/import_cvat_signal_annotations.py`, `docs/cvat_interop.md`) + RE review (`scripts/make_re_review_template.py`, `scripts/render_re_review_timeline.py`, `scripts/apply_re_review.py`, `docs/re_timeline_review.md`) |
 | _(downstream)_ | AWML info / Deepen / CVAT / COCO / DLR **from** standard t4dataset annotation | Tier B/B' -> external formats | **existing t4devkit / webauto tooling — not maintained here** |
 | **L5 ros2 verification** | score the live Autoware node against our GT (detection + classification) | node rosbag -> `tlr_autolabel/v1` -> eval | `ros2_pipeline/`, `scripts/bag_to_labels.py`, `docs/eval_design.md` |
 | **L6 evaluation** | metrics vs GT: detection P/R/IoU + classification accuracy + confusion (two-source), plus the ledger profiles; RE level via driving_log_replayer_v2 | pred + GT -> `tlr_eval*` reports | `scripts/eval_vs_gt.py`, `scripts/evaluate_signals.py` |
+| **L6 comparison** | GT-free, map-free diff of several runs: agreement, disagreement location, temporal stability, timing, side-by-side grids | N Tier A dirs -> `compare_naive.{json,md}` + grids | `scripts/compare_naive.py` (map-referenced variant: `scripts/compare_runs.py`) |
 
 ## Repository layout
 
 - `tlr_autolabel/`: reusable Python package split by domain (`cli`, `core`,
-  `inference`, `map`, `tracking`, `t4`, `review`, `eval`). The heavier command
-  orchestration now lives here, so tests and future tools can import it directly.
+  `frames`, `inference`, `compare`, `map`, `tracking`, `t4`, `review`, `eval`).
+  The heavier command orchestration now lives here, so tests and future tools can
+  import it directly.
 - `scripts/`: thin command-line entrypoints. Use `python3 scripts/<tool>.py ...`.
-- `configs/`: detector presets, state vocabularies, model parameter YAMLs, and
-  tracking profiles.
+- `configs/`: detector presets, comparison matrices, state vocabularies, model
+  parameter YAMLs, and tracking profiles.
 - `models/`: small checked-in model artifacts used as defaults or debug aids.
 - `tools/`: non-Python helper sources such as the TensorRT runner.
 - `data/` and `sample_preview/`: local ignored artifacts for smoke/manual
@@ -201,16 +203,48 @@ Flexibility contract (what happens when model specs change):
 - **yolox head**: `num_class` is taken from the output shape (`4+1+C`);
   multi-class variants score as obj × best class. A wrong grid count (input
   size / stride mismatch) raises with a diagnostic instead of decoding garbage.
-- **Family detection** is by output signature (1 output = yolox head, 3 =
-  CoMLOps darknet); anything else exits telling you to add a decode — extend
-  `Detector.__init__/detect` for new families.
+- **Family selection** is explicit: `detector_type` in the preset or
+  `--detector-type`; absent, it falls back to the output-count guess (1 = yolox
+  head, 3 = CoMLOps darknet) and warns. A new family is one module under
+  `tlr_autolabel/inference/models/` with `@register_detector` — no wrapper edit
+  (`docs/model_interface.md`).
 - **Presets** may use `$ENV_VARS` and `~` in paths; a missing model path fails
   fast, naming the preset it came from.
 - Per-model decode constants never live in code: yolox needs none, CoMLOps
   reads `configs/model_params/comlops_large_detector_ml.param.yaml` (`--comlops-param`).
 - The **classifier** is swappable the same way (`--classifier` /
-  `--classifier-param`); a different classifier architecture needs its decode
-  added alongside the LampRecognizer one.
+  `--classifier-param`), and its family is a plug-in too: `classifier_type` /
+  `--classifier-type`, one module with `@register_classifier`, default
+  `lamp_recognizer`. `--classifier none` runs the detector alone.
+- **Input** is not limited to a directory: `--video`, `--bag` (rosbag2), or
+  `--t4-dataset` feed the same pipeline (`docs/inference_comparison.md`).
+
+### Comparing configurations (any input, no GT, no map)
+
+To answer "what do these detector/classifier combinations actually output on
+this footage", run the matrix instead of one configuration:
+
+```bash
+# any input: image dir, --video drive.mp4, --bag ./rosbag2_..., --t4-dataset <ds>
+python3 scripts/run_compare.py --matrix configs/compare/detector-matrix.yaml \
+    --video drive.mp4 --frame-stride 5 --out build/compare/drive --compare
+```
+
+Each combination writes an **ordinary Tier A label directory**
+(`<out>/labels/<name>/`), so the result also feeds `match_traffic_lights.py`,
+`compare_runs.py`, `render_l1_video.py`, `eval_l1_vs_t4.py`. The `--compare` step
+(or `scripts/compare_naive.py` later, no GPU needed) reports per-configuration
+counts/score-size distributions/timing, frame-to-frame stability, pairwise
+agreement against a reference plus where the disagreements are, an optional
+majority-vote consensus, and side-by-side grids of the worst-disagreeing frames.
+
+Video/bag frames are extracted once into `<out>/frames/` so every configuration
+sees identical pixels (and so the review tools have real image files).
+
+> **A difference is not an error.** Without GT, more detections is not better —
+> PLAN 2.8/2.9 has the S960-vs-L1920 reversal to prove it. Use this to locate
+> differences; use `compare_runs.py` (map-referenced) or the GT evaluators to
+> decide which one is an improvement. Full design: `docs/inference_comparison.md`.
 
 ## AWML training input (investigated 2026-07-18)
 
@@ -290,11 +324,18 @@ full image ──> tlr_detector_onnx.py ──> ROI crops ──> tlr_lamp_recog
 ```
 
 `scripts/tlr_autolabel.py` runs the whole chain (detector -> per-ROI classifier) and
-writes per-image JSON (+ optional annotated `--viz` PNG).
+writes per-frame JSON (+ optional annotated `--viz` PNG).
 
 ```bash
 python3 scripts/tlr_autolabel.py <image_or_dir> --out-dir ./labels [--viz] [--drop-unknown]
+python3 scripts/tlr_autolabel.py --video drive.mp4 --frame-stride 5 --out-dir ./labels
+python3 scripts/tlr_autolabel.py --bag ./rosbag2_2026 --out-dir ./labels   # needs ROS 2 sourced
+python3 scripts/tlr_autolabel.py --t4-dataset <ds> --channels CAM_FRONT --out-dir ./labels
 ```
+
+Frames come from a frame source, so the input can be an image directory, a
+video, a rosbag2, or a T4 dataset — see `docs/inference_comparison.md` for the
+frame-identity rules each one uses.
 
 ### GPU (recommended — ~15-30x faster)
 
@@ -391,6 +432,8 @@ with the int8 engine. Cost: 5 detector passes per frame instead of 1 (cheap on
 GPU via `.engine`).
 
 ### Per-image JSON schema (`tlr_autolabel/v1`) — internal IF, frozen 2026-07-18
+(additive optional keys 2026-08-07: `source`, `timestamp_us`, `timing_ms`,
+`meta.detector_type` / `meta.classifier_type` / model digests)
 
 ```jsonc
 {
@@ -402,16 +445,31 @@ GPU via `.engine`).
   "channel": "CAM_FRONT",                   // from the path (uppercase component)
   "frame_index": 0,                         // numeric filename stem, else input order
   "width": 2880, "height": 1860,            // original image size, px
+  "source": {                               // optional; only for non-file frame
+    "kind": "video",                        // sources (video / rosbag): where the
+    "uri": "/abs/drive.mp4",                // frame came from. Absent for image
+    "frame_number": 120, "stride": 5        // dirs and T4 datasets.
+  },                                        // (bag: + topic, stamp_ns, message_index)
+  "timestamp_us": 1700000000000000,         // optional; when the frame has a time
+                                            // (video position / bag stamp / T4)
   "meta": {                                 // provenance: how these labels were made
     "run_id": "<--run-id or timestamp+rand>",
     "created_at": "2026-07-18T00:00:00+00:00",
     "detector": "<model file basename>",
     "detector_backend": "tensorrt-engine | ['CPUExecutionProvider'] | ...",
-    "classifier": "<model file basename>",
+    "classifier": "<model file basename>",  // null for a detector-only run
     "tiles": true,
     "det_score_thr": 0.5, "det_nms_thr": 0.35,
     "cls_score_thr": 0.2, "cls_nms_thr": 0.2,
-    "min_box": 8.0, "crop_pad": 0.0
+    "min_box": 8.0, "crop_pad": 0.0,
+    "detector_type": "yolox",               // model family (registry key)
+    "classifier_type": "lamp_recognizer",   // omitted for a detector-only run
+    "detector_sha256": "...",               // optional; --model-digest. Two runs
+    "classifier_sha256": "..."              // are comparable only if these match
+  },
+  "timing_ms": {                            // optional; --timing (always on for
+    "detector": 41.2, "classifier": 3.8,    // comparison runs)
+    "total": 46.0, "crops": 2
   },
   "signals": [
     {
@@ -445,6 +503,13 @@ GPU via `.engine`).
 The image root is `--image-root` if given, else the T4 dataset root with
 `--t4-dataset`, else the input directory. `--t4-dataset <root>` resolves
 `sample_data_token` from `annotation/sample_data.json` by realpath match.
+
+`image` / `image_realpath` / `channel` / `frame_index` are assigned by the frame
+source; for image directories the rules are unchanged (relative path, uppercase
+path component, numeric stem else input order). A video or bag frame has no file,
+so `image_realpath` is null and `image` is a synthetic reference — unless the run
+extracted its frames (which `scripts/run_compare.py` always does), in which case
+both point at the extracted PNG. See `docs/inference_comparison.md`.
 
 Rules: `state` and `lamps[].label` are derived (see the state spec below) and
 always re-derivable from the decomposed lamp fields; consumers should treat the
