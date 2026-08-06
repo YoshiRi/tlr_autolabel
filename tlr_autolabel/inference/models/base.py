@@ -32,3 +32,31 @@ class DetectorModel(Protocol):
     def set_keep_classes(self, names: list[str]) -> None:
         """No-op for single-class families; filters class_id for multi-class."""
         ...
+
+
+@runtime_checkable
+class ClassifierModel(Protocol):
+    """One classifier family's preprocess + decode over a traffic-light crop.
+
+    The runtime (`LampClassifier`) owns the session/engine, the crop extraction
+    and the padding; the model owns how a crop becomes a blob and how the raw
+    output becomes lamps.
+
+    `decode` returns the canonical Tier A lamp list — dicts with
+    `{label, color, shape, arrow, confidence}`. A family that predicts one label
+    for the whole signal (rather than per-lamp boxes) returns a single-element
+    list; that keeps `state` comparable across families, which is the whole
+    point of the canonical vocabulary.
+    """
+
+    name: str
+    input_size: tuple[int, int] | None  # (w, h) when the family fixes it, else None
+
+    def preprocess(self, crop: np.ndarray, w: int, h: int) -> np.ndarray:
+        """Return the NCHW float32 blob for one crop."""
+        ...
+
+    def decode(self, output: np.ndarray, w: int, h: int,
+               score_thr: float, nms_thr: float) -> list[dict]:
+        """Raw session/engine output (batch dim squeezed) -> canonical lamps."""
+        ...
