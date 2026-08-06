@@ -1,0 +1,28 @@
+# Detector ablation: model size x tiling, one classifier.
+#
+# Reproduces the 2x2 that produced the S960 > L1920 finding (PLAN.md 2.8) as a
+# single command, over any input:
+#
+#   python3 scripts/run_compare.py --matrix configs/compare/detector-matrix.yaml \
+#       --video drive.mp4 --frame-stride 5 --out build/compare/drive --compare
+#
+# `frames:` is intentionally absent: pass the input on the command line
+# (an image dir, --video, --bag, or --t4-dataset) so one matrix serves every
+# input. Set it here instead when a matrix belongs to one specific recording.
+schema_version: tlr_compare_matrix/v1
+
+defaults:
+  # Node-parity recall; the comparison is about the models, not the threshold.
+  det_score_thr: 0.35
+
+combos:
+  - name: S960
+    preset: yolox-960-int8          # tiles: false in the preset
+  - name: S960_tiles
+    preset: yolox-960-int8
+    overrides: {tiles: true}
+  - name: L1920
+    preset: yolox-1920-int8
+    overrides: {tiles: false}
+  - name: L1920_tiles
+    preset: yolox-1920-int8         # tiles: true in the preset

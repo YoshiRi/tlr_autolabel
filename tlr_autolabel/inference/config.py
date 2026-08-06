@@ -159,6 +159,8 @@ def resolve_config(preset=None, overrides=None) -> InferenceConfig:
         if key not in CONFIG_FIELDS:
             raise SystemExit(f"unknown configuration key {key!r}")
         values[key] = _normalize(key, val)
+    # `preset` is recorded on the config, so it must not also arrive as a value
+    values.pop("preset", None)
     cfg = InferenceConfig(preset=preset, **values)
     # paths given directly (CLI/matrix) may also use ~ / $VARS / ${TLR_MODEL_ROOT}
     return replace(cfg, **{f: (expand_path(getattr(cfg, f))
