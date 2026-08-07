@@ -210,12 +210,36 @@ python3 scripts/compare_naive.py old=./labels_old new=./labels_new --out build/c
 On GPU, put `run_gpu.sh`'s environment around the runner the same way
 `run_dataset.py` does for L1 (the engines path needs the venv's CUDA libs).
 
-Verified end to end on 2026-08-07 with the real Autoware model-store stack
-(`autoware-mlmodels-960-onnx`, CPU onnxruntime) over a T4 dataset: two
-thresholds × 4 frames of `CAM_TRAFFIC_LIGHT_NEAR`, giving Tier A with
-`sample_data_token` intact, `timing_ms` around 0.7-0.8 s/frame on CPU, a full
-agreement report, and legible cropped grids. The `.engine` + `--bag` paths have
-unit coverage but have not been run on real hardware/bags yet (PLAN item 12).
+### Verified on real models (2026-08-07)
+
+All over `CAM_TRAFFIC_LIGHT_NEAR` of a T4 dataset, with the Autoware model-store
+stack under `/opt/autoware/mlmodels`, on an RTX 3060 Laptop (6 GB) + TensorRT
+10.8.
+
+**ONNX path** (`autoware-mlmodels-960-onnx`, CPU onnxruntime): Tier A with
+`sample_data_token` intact, `timing_ms` ≈ 0.7-1.2 s/frame, full agreement report,
+legible cropped grids.
+
+**`.engine` path** (detector *and* classifier engines; `trt_run` compiled on
+first use):
+
+- **Decode parity with ONNX**: identical boxes and states, detector scores within
+  ~1e-3 (e.g. 0.8525 vs 0.8523) — box agreement 1.0, state agreement 1.0.
+- **Speed**: detector 35 ms/frame on the engine vs 628 ms on CPU onnxruntime;
+  end-to-end 338 ms vs 1156 ms.
+- **Sequential residency**: three engine configurations in one run each loaded
+  and released their own detector + classifier engines on a 6 GB GPU with no OOM,
+  and left **zero orphan `trt_run` processes** — the `Pipeline.close()` →
+  `TrtServer.close()` path does what it claims.
+- **Tiles on the engine**: 5 detector passes/frame, 271 → 979 ms, +4 detections
+  over the no-tiles run. The report placed those extra detections correctly:
+  consensus precision 0.824 for the tiled configuration (its extras are not
+  corroborated by the others) and a median disagreement score of 0.527, i.e.
+  marginal detections rather than a different view of the scene. This is the
+  recall-vs-FP tradeoff the harness exists to show.
+
+**Not yet exercised on real data**: `--bag` (needs a rosbag to hand; the decode
+and naming rules have unit coverage) — see PLAN item 12.
 
 ## Extending
 

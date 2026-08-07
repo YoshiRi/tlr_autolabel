@@ -419,8 +419,14 @@ autolabelingで再現可能に選べるようにする。出力IFは既存
       (`autoware-mlmodels-960-onnx`、CPU onnxruntime)で T4 dataset の
       CAM_TRAFFIC_LIGHT_NEAR 4frame × 2閾値を実走。Tier A(sample_data_token 付き)、
       timing 0.7-0.8s/frame、一致レポート、crop付きグリッドまで確認
-- [ ] **`.engine` + 実 bag** はユーザー環境で未実施 — `run_gpu.sh` 相当の環境で
-      `--matrix configs/compare/detector-matrix.yaml`、`--bag` は ROS 2 source 済み環境で
+- [x] **`.engine` 経路の実走確認**(2026-08-07、RTX 3060 Laptop 6GB + TensorRT 10.8):
+      detector engine + classifier engine 両方。①ONNXとデコード一致(箱・state同一、
+      score差~1e-3、box/state agreement 1.0)②detector 35ms/frame(engine)vs 628ms(CPU onnx)
+      ③**engine構成3本を逐次実行して6GBでOOMなし・orphan trt_run 0**(`Pipeline.close()` →
+      `TrtServer.close()` が効いている)④engine+tiles: 271→979ms、検出+4。その+4を
+      レポートが正しく「consensus precision 0.824 / 不一致箱のscore中央値 0.527(=境界検出)」
+      と位置づけた
+- [ ] **実 bag での試走**は未実施(bag が手元にない。デコード/命名規則はユニットテストのみ)
 - [x] 実走で判明した2点を修正: ①strideした run の安定性指標は `n/a` 表示
       (frame_index の中央ギャップを併記。0.0 だと「フリッカー」と誤読される)
       ②グリッドの箱/ラベルは panel リサイズ**後**に描画(2880px→800px で潰れていた)。
