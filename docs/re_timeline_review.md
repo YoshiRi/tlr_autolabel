@@ -477,3 +477,36 @@ rejections:
 `candidate_taken` covers exactly the matched band -- meaning several boxes
 competed for way 3595 in those frames and all but one lost. Way 3595 is
 rejected roughly four times as often as it is matched.
+
+## Moving between the three views
+
+The timeline corrects annotations; the frame and map views explain them. They
+cross-link, and the link carries the frame you are on, so switching view keeps
+the moment instead of restarting at frame 0.
+
+| from | to | link carries |
+|---|---|---|
+| timeline (evidence crop) | frame view | `#token=<annotation_token>` -- opens that frame with the box selected |
+| timeline (evidence crop) | map view | `#ch=<channel>&t=<timestamp>` |
+| frame view | map view / timeline | `#ch=&t=` of the frame on screen |
+| map view | frame view / timeline | `#ch=&t=` of the frame on screen |
+
+The header links follow whichever evidence crop is selected; each crop also
+carries its own pair of links, which open in a new tab. A hash naming a frame
+hidden by the "unmatched only" filter clears the filter rather than landing
+somewhere else.
+
+Targets are resolved by `companion_links()` and default to the conventional
+`build/tl_match/` filenames, overridable with `--frame-view` / `--map-view` /
+`--timeline`. The three pages are generated independently, so a link can point
+at a page not generated yet -- deliberate, since forcing a generation order
+would be worse than a link you regenerate into:
+
+```bash
+python3 -m tlr_autolabel.review.re_review_timeline --dataset-root data/<ds> --serve
+python3 -m tlr_autolabel.review.re_frame_view      --dataset-root data/<ds>
+python3 -m tlr_autolabel.review.re_map_view        --dataset-root data/<ds>
+```
+
+Verified on cb7fd5c0: all 137 timeline crop candidates and all 900 ROI-editor
+frames resolve in the frame view, and all 668 frames resolve in the map view.
