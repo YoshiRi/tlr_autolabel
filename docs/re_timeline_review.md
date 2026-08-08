@@ -12,8 +12,8 @@ L1 inference.
 
 | layer | Owns | Does not own |
 |---|---|---|
-| CVAT / A' import | `box2d`, false-positive rejection, per-frame `visibility` fixes, `map_traffic_light_id`, local bbox additions | Bulk state propagation across frames |
-| RE timeline review | `state`/`review_status` over a physical signal group/time interval, and `visibility` over a physical-signal × **camera channel** / time interval | Geometry, raw detector provenance, map matching |
+| CVAT / A' import | `box2d` creation, false-positive rejection, per-frame `visibility` fixes, `map_traffic_light_id`, local bbox additions | Bulk state propagation across frames |
+| RE timeline review | `state`/`review_status` over a physical signal group/time interval, `visibility` over a physical-signal × **camera channel** / time interval, and single-frame `box2d` corrections spotted while reviewing | Geometry authoring/deletion, raw detector provenance, map matching |
 | L6 evaluation | Reads reviewed A' sidecar / derived GT | Generates or edits GT |
 
 Visibility is a bulk-editable exception to "CVAT owns visibility": a passing
@@ -22,6 +22,14 @@ repetitive per-frame edit the timeline review exists to avoid. Because
 occlusion is camera-view-dependent (one camera can be blocked while another
 sees the same physical signal fine), visibility segments are tracked and
 applied **per camera channel**, not per physical-signal group like state is.
+
+`box2d` correction is a narrower, single-frame exception: CVAT remains the
+primary geometry editor (creating boxes, rejecting false positives). The
+timeline review only lets a reviewer nudge an *existing* box that drifted
+wrong on a specific frame -- typically noticed while reviewing state/visibility
+on the same image -- without leaving the tool. Unlike `state`/`visibility`,
+geometry does not propagate across time, so each correction targets one exact
+annotation (`annotation_token`), not a time interval.
 
 ## Signal group identity
 
@@ -84,7 +92,19 @@ Schema:
             "note": "truck passing in front of the signal"
           }
         ]
-      }
+      },
+      "roi_decisions": [
+        {
+          "annotation_token": "...",
+          "channel": "CAM_FRONT",
+          "sample_token": "...",
+          "timestamp": 1783325718047571,
+          "box2d": [1234.5, 567.0, 1300.2, 620.4],
+          "review_status": "fixed",
+          "source": "manual_timeline_review",
+          "note": "box drifted onto the pole during occlusion"
+        }
+      ]
     }
   ]
 }
@@ -94,7 +114,10 @@ Schema:
 tokens with the same parser used by CVAT import. `visibility_decisions` is
 optional per group and keyed by camera channel; a group with no visibility
 corrections to make simply omits the key (or leaves it empty), so existing
-`traffic_signal_re_review/v1` files without it remain valid.
+`traffic_signal_re_review/v1` files without it remain valid. `roi_decisions`
+is likewise optional per group and is a flat list, not keyed by channel --
+each entry already carries the exact `annotation_token` (and `channel` for
+display) it corrects, so there is nothing to group by.
 
 ## Application rules
 
@@ -125,10 +148,24 @@ annotation's own `channel` must equal the decision's channel. Effect by
 | `accepted` / `fixed` | Set `visibility` |
 | `rejected` / `unchecked` | No effect when applying |
 
-State and visibility decisions apply independently -- an annotation can get
-its `state` updated by a group decision and its `visibility` updated by a
-channel decision in the same `apply_re_review.py` run, or either without the
-other.
+A `roi_decisions` entry matches an annotation when its `annotation_token`
+equals the annotation's own `token` -- an exact identity match, not an
+interval/way match, since geometry does not propagate across frames the way
+state and visibility do. Effect by `review_status`:
+
+| status | Effect |
+|---|---|
+| `fixed` | Set `box2d` |
+| `accepted` / `rejected` / `unchecked` | No effect when applying |
+
+`accepted` intentionally has no effect: it just lets a reviewer mark a frame
+as "geometry checked, already correct" in the UI without writing a spurious
+identical `box2d`.
+
+State, visibility, and ROI decisions apply independently -- an annotation can
+get its `state` updated by a group decision, its `visibility` updated by a
+channel decision, and its `box2d` updated by a token-matched ROI decision, all
+in the same `apply_re_review.py` run, or any subset of the three.
 
 The following are preserved unless overridden by the rules above: `box2d`,
 `occluded`, `visibility`, `map_traffic_light_id`, `regulatory_element_id`,
@@ -197,8 +234,11 @@ Candidate selection is intentionally heuristic and review-oriented:
 - keep annotations whose `sample_token` is inside the selected segment, avoiding
   false misses from the few-millisecond difference between `sample.timestamp`
   and per-camera `sample_data.timestamp`;
-- use front-facing camera channels by default:
-  `CAM_FRONT,CAM_FRONT_LEFT,CAM_FRONT_RIGHT,CAM_FRONT_FAR`;
+- use the traffic-light and front-facing camera channels by default:
+  `CAM_TRAFFIC_LIGHT_NEAR,CAM_TRAFFIC_LIGHT_FAR,CAM_FRONT,CAM_FRONT_LEFT,CAM_FRONT_RIGHT,CAM_FRONT_FAR`
+  -- the `CAM_TRAFFIC_LIGHT_*` pair is what T4 datasets normally annotate
+  signals on, the `CAM_FRONT*` entries cover datasets that use the general
+  forward cameras instead;
 - rank by bbox shorter side, detector confidence, visibility, source type, and
   closeness to the segment center in sample order;
 - select one best candidate per camera first, then fill the remaining slots by
@@ -229,3 +269,105 @@ Pass an explicit comma-separated list to narrow it, `--crop-channels all` to
 disable filtering entirely (includes rear cameras; useful for map/fusion
 debugging), or `--show-empty-crop-segments` to keep no-evidence segments visible
 instead of hiding them.
+
+If every segment is still filtered out the tool exits with the channels the
+sidecar actually contains alongside what `--crop-channels` resolved to, since a
+channel-name mismatch is the usual cause of an empty result.
+
+## ROI (box2d) correction
+
+The pre-baked crop above is a lossy, heuristic JPEG meant for quick evidence
+browsing, not pixel-accurate editing. The "Edit ROI on this frame" button
+under a crop instead opens a live editor against the *original* full-resolution
+image (the same one already linked from the crop), so corrections are exact
+in the source image's own pixel space rather than a resized/burned-in copy.
+
+The editor:
+
+- computes a tight zoom window around the current box client-side (no new
+  image files are generated) -- this is the "strict crop": always centered on
+  the box, always mathematically exact, recomputed on demand rather than
+  pre-baked at a fixed heuristic margin;
+- lets a reviewer drag any of 8 handles (4 corners + 4 edge midpoints) to
+  resize, or drag the box body to move it, with numeric `x0/y0/x1/y1` fields
+  as an exact-value fallback;
+- zooms with the mouse wheel, anchored on the cursor, so the point under the
+  pointer stays put; "Recenter zoom" resets to the tight window around the box;
+- steps frame-by-frame ("Prev/Next frame") through every annotated frame for
+  that signal group and camera channel across the **whole row**, not only the
+  selected segment -- a box that drifts at a segment boundary is normally
+  fixed from the neighbouring frame, which sits in the adjacent segment. The
+  frame counter marks `[outside segment]` once you step past the segment you
+  opened the editor from;
+- copies the neighbouring frame's box with "Copy ROI from prev/next frame"
+  (its saved fix if it has one, else its detected box), which is the common
+  case for a short run of drifted boxes. The copy is staged in the editor
+  only -- adjust and press "Save ROI" to keep it;
+- is reachable from either a state segment or a visibility segment, since ROI
+  problems are usually noticed incidentally while reviewing one of those.
+
+Saved corrections are staged in-browser exactly like state/visibility
+decisions and are included in the same exported `traffic_signal_re_review/v1`
+JSON, as `roi_decisions`.
+
+## Saving back to the dataset (`--serve`)
+
+Opened over `file://` the page is fully static and cannot write to disk --
+browsers forbid it -- so "Export JSON" downloads the review file and you move
+it into the dataset yourself.
+
+`--serve` removes that step:
+
+```bash
+python3 -m tlr_autolabel.review.re_review_timeline \
+  --dataset-root data/<dataset> --serve
+# -> open http://127.0.0.1:8765/build/tl_match/re_review_timeline.html
+```
+
+It serves the dataset root over loopback and lets the page write back. Two
+separate files keep "where I am" apart from "what I approved":
+
+| file | written by | holds |
+|---|---|---|
+| `annotation/traffic_signal_re_review.draft.json` | auto-save, continuously | work in progress |
+| `annotation/traffic_signal_re_review.json` | "Export / commit" only | reviewed output |
+
+Reason: a review session is long and interruptible, but the committed file is
+what `apply_re_review.py` and L6 consume. Continuous writes to that file would
+mean any half-finished session silently becomes the reviewed output. Splitting
+them makes crash recovery free without ever publishing unverified state.
+
+**Auto-save is on by default** and targets the draft only: every staged change
+(state, visibility, ROI, and JSON import) lands within about half a second, so
+an interrupted session loses nothing. The "auto-save draft on every change"
+checkbox turns it off; turning it back on flushes what is already staged.
+
+**"Export / commit"** opens a diff of the staged review against the currently
+committed file -- added, changed, and removed entries per decision kind, with
+before/after values -- and writes only after you confirm. On success the draft
+is deleted, so its presence means "unfinished work", not stale residue.
+Comparison ignores derived bookkeeping (`source`, `n_frames`); only `state` /
+`visibility` / `box2d`, `review_status`, and `note` count as changes.
+
+On load the page prefers the draft, falling back to the committed file, so
+reopening resumes exactly where you stopped. `--review` overrides both.
+
+Other guarantees:
+
+- the commit target is `--review-out`, default
+  `annotation/traffic_signal_re_review.json`; the draft is derived from it;
+- writes are atomic (temp file + rename); the committed file keeps one
+  generation of backup at `<target>.bak`, the draft does not need one;
+- every endpoint rejects payloads that are not `traffic_signal_re_review/v1`,
+  so a stray request cannot truncate either file;
+- bursts of edits coalesce into one write and saves never overlap, so the draft
+  cannot end up behind the UI from an out-of-order response;
+- the server binds `127.0.0.1` only, since these endpoints write to the dataset.
+
+`--output` must live inside `--dataset-root` under `--serve` so the page and
+its images share one document root. Datasets that symlink `data/` and `build/`
+to a shared sibling are fine -- the check is on the logical path and the
+served files follow the links.
+
+"Export JSON" (browser download) still works in both modes and is the only
+option over `file://`.

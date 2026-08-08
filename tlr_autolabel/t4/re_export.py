@@ -30,6 +30,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 from tlr_autolabel.review.re_apply import (
     apply_review,
     normalize_decisions,
+    normalize_roi_decisions,
     normalize_visibility_decisions,
     timestamps_by_sample,
 )
@@ -210,6 +211,7 @@ def main() -> None:
     sidecar = load_json(sidecar_path)
 
     visibility_decisions: list[dict] = []
+    roi_decisions: list[dict] = []
     if args.timeseries:
         timeseries_path = resolve_path(args.dataset_root, args.timeseries)
         decisions = decisions_from_timeseries(
@@ -233,15 +235,16 @@ def main() -> None:
             args.dataset_root,
             args.unchecked_as,
         )
-        # visibility_decisions is per-camera and only exists in the
+        # visibility_decisions and roi_decisions only exist in the
         # traffic_signal_re_review/v1 schema, not the legacy timeseries source.
         visibility_decisions = normalize_visibility_decisions(
             review, timestamps_by_sample(sidecar, args.dataset_root)
         )
+        roi_decisions = normalize_roi_decisions(review)
         source_desc = str(review_path)
 
     decision_summary = summarize_decisions(decisions)
-    reviewed, apply_summary = apply_review(sidecar, decisions, visibility_decisions)
+    reviewed, apply_summary = apply_review(sidecar, decisions, visibility_decisions, roi_decisions)
     if not args.allow_empty_application:
         if decision_summary["apply_decisions"] == 0:
             raise SystemExit(
@@ -261,7 +264,8 @@ def main() -> None:
             f"apply_decisions={decision_summary['apply_decisions']} "
             f"by_status={decision_summary['by_status']} "
             f"applied_annotations={apply_summary['applied_annotations']} "
-            f"overlaps={apply_summary['overlapping_annotation_matches']}",
+            f"overlaps={apply_summary['overlapping_annotation_matches']} "
+            f"applied_roi_annotations={apply_summary['applied_roi_annotations']}",
             flush=True,
         )
         run_to_object_ann(args, temp_path)

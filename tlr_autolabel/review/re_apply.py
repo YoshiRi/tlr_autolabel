@@ -27,6 +27,7 @@ VALID_REVIEW_STATUS = {"unchecked", "accepted", "rejected", "fixed"}
 APPLY_STATUSES = {"accepted", "rejected", "fixed"}
 VALID_VISIBILITY = {"full", "partial", "occluded", "unknown"}
 APPLY_VISIBILITY_STATUSES = {"accepted", "fixed"}
+APPLY_ROI_STATUSES = {"fixed"}
 
 
 def invalid_state_tokens(state: str) -> list[str]:
@@ -211,6 +212,71 @@ def normalize_visibility_decisions(review: dict, sample_ts: dict[str, int]) -> l
     return decisions
 
 
+def normalize_box2d(value) -> list[float]:
+    if not isinstance(value, (list, tuple)) or len(value) != 4:
+        raise ValueError(f"box2d must be a 4-element [x0,y0,x1,y1] list, got {value!r}")
+    try:
+        x0, y0, x1, y1 = (float(v) for v in value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"box2d values must be numeric: {value!r}") from exc
+    if not (x1 > x0 and y1 > y0):
+        raise ValueError(f"box2d must satisfy x1>x0 and y1>y0, got {value!r}")
+    return [x0, y0, x1, y1]
+
+
+def normalize_roi_decisions(review: dict) -> list[dict]:
+    """Per-frame box2d corrections.
+
+    Unlike state/visibility, geometry does not propagate across frames, so
+    each entry targets one exact annotation by token rather than a time
+    interval + member_ways/regulatory_element_ids match.
+    """
+    decisions = []
+    errors = []
+    for group_index, group in enumerate(review.get("groups", [])):
+        raw_decisions = group.get("roi_decisions", [])
+        if not raw_decisions:
+            continue
+        for decision_index, raw in enumerate(raw_decisions):
+            status = raw.get("review_status", "unchecked")
+            if status not in VALID_REVIEW_STATUS:
+                errors.append(
+                    f"group#{group_index} roi_decision#{decision_index}: "
+                    f"invalid review_status {status!r}"
+                )
+                continue
+            token = raw.get("annotation_token")
+            if not token:
+                errors.append(
+                    f"group#{group_index} roi_decision#{decision_index}: missing annotation_token"
+                )
+                continue
+            try:
+                box2d = normalize_box2d(raw.get("box2d"))
+            except ValueError as exc:
+                errors.append(f"group#{group_index} roi_decision#{decision_index}: {exc}")
+                continue
+            decisions.append(
+                {
+                    "group_index": group_index,
+                    "decision_index": decision_index,
+                    "signal_group_id": group.get("signal_group_id", ""),
+                    "annotation_token": token,
+                    "channel": raw.get("channel", ""),
+                    "box2d": box2d,
+                    "review_status": status,
+                }
+            )
+    if errors:
+        detail = "\n  ".join(errors)
+        raise SystemExit(f"review validation failed, {len(errors)} problem(s):\n  {detail}")
+    return decisions
+
+
+def roi_decision_matches_annotation(decision: dict, ann: dict) -> bool:
+    return bool(ann.get("token")) and ann.get("token") == decision["annotation_token"]
+
+
 def decision_matches_annotation(decision: dict, ann: dict) -> bool:
     timestamp = ann.get("timestamp")
     if timestamp is None:
@@ -234,7 +300,10 @@ def visibility_decision_matches_annotation(decision: dict, ann: dict) -> bool:
 
 
 def apply_review(
-    sidecar: dict, decisions: list[dict], visibility_decisions: list[dict] | None = None,
+    sidecar: dict,
+    decisions: list[dict],
+    visibility_decisions: list[dict] | None = None,
+    roi_decisions: list[dict] | None = None,
 ) -> tuple[dict, dict]:
     out = json.loads(json.dumps(sidecar))
     applied = Counter()
@@ -245,8 +314,11 @@ def apply_review(
     active_visibility = [
         d for d in (visibility_decisions or []) if d["review_status"] in APPLY_VISIBILITY_STATUSES
     ]
+    active_roi = [d for d in (roi_decisions or []) if d["review_status"] in APPLY_ROI_STATUSES]
     visibility_overlaps = 0
     applied_visibility = 0
+    roi_overlaps = 0
+    applied_roi = 0
     for ann in out.get("annotations", []):
         hits = [d for d in active_decisions if decision_matches_annotation(d, ann)]
         if hits:
@@ -271,6 +343,13 @@ def apply_review(
             attrs["visibility"] = vis_hits[-1]["visibility"]
             applied_visibility += 1
 
+        roi_hits = [d for d in active_roi if roi_decision_matches_annotation(d, ann)]
+        if roi_hits:
+            if len(roi_hits) > 1:
+                roi_overlaps += 1
+            ann["box2d"] = roi_hits[-1]["box2d"]
+            applied_roi += 1
+
     out["schema_version"] = sidecar.get("schema_version", "traffic_signal_2d/v2")
     out["source"] = "re_timeline_review"
     out["created_at"] = datetime.now(timezone.utc).isoformat()
@@ -283,6 +362,9 @@ def apply_review(
         "applied_visibility_decisions": len(active_visibility),
         "applied_visibility_annotations": applied_visibility,
         "overlapping_visibility_matches": visibility_overlaps,
+        "applied_roi_decisions": len(active_roi),
+        "applied_roi_annotations": applied_roi,
+        "overlapping_roi_matches": roi_overlaps,
     }
     return out, out["re_review"]
 
@@ -328,7 +410,8 @@ def main() -> None:
     sample_ts = timestamps_by_sample(sidecar, root)
     decisions = normalize_decisions(review, sample_ts)
     visibility_decisions = normalize_visibility_decisions(review, sample_ts)
-    reviewed, summary = apply_review(sidecar, decisions, visibility_decisions)
+    roi_decisions = normalize_roi_decisions(review)
+    reviewed, summary = apply_review(sidecar, decisions, visibility_decisions, roi_decisions)
 
     print(
         "decisions="
@@ -342,6 +425,12 @@ def main() -> None:
         f"{len(visibility_decisions)} apply_visibility_decisions={summary['applied_visibility_decisions']} "
         f"applied_visibility_annotations={summary['applied_visibility_annotations']} "
         f"overlaps={summary['overlapping_visibility_matches']}"
+    )
+    print(
+        "roi_decisions="
+        f"{len(roi_decisions)} apply_roi_decisions={summary['applied_roi_decisions']} "
+        f"applied_roi_annotations={summary['applied_roi_annotations']} "
+        f"overlaps={summary['overlapping_roi_matches']}"
     )
     if args.dry_run:
         return
