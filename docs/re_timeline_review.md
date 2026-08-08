@@ -371,3 +371,50 @@ served files follow the links.
 
 "Export JSON" (browser download) still works in both modes and is the only
 option over `file://`.
+
+## Per-frame view (`re_frame_view.py`)
+
+The timeline is organised by signal group over time, so it can only show
+annotations that matched a map regulatory element -- `annotation_matches_group()`
+requires a non-empty `map_traffic_light_id` or `regulatory_element_id`. On the
+odaiba cb7fd5c0 dataset that hides **742 of 1642 boxes (45%)**, 482 of them
+pedestrian signals.
+
+`re_frame_view.py` answers the complementary question -- "on this image, what
+was detected and how was each box classified" -- and shows every box regardless
+of map match:
+
+```bash
+python3 -m tlr_autolabel.review.re_frame_view --dataset-root data/<dataset>
+# -> build/tl_match/re_frame_view.html
+```
+
+Read-only: it stages nothing and writes nothing back, so no server is needed
+and `file://` is fine.
+
+Signals occupy roughly 46x23 px in a 2880x1860 image, so a whole-frame view
+alone cannot convey state. The page pairs them:
+
+- the full frame with state-coloured boxes -- solid = matched to a map RE,
+  dashed = unmatched and therefore unreachable from the timeline review;
+- a strip of zoomed crops, one per box, each labelled with its `state` plus
+  kind/score/visibility and, when unmatched, the `unmatched_reason` and the
+  `map_candidate_id` the matcher rejected.
+
+Crops are drawn client-side from the already-loaded frame, so no extra JPEGs
+are generated. Navigation is arrow keys / slider / play, with the next frame
+preloaded, and a "frames with unmatched only" filter for auditing match
+failures.
+
+### What an unmatched box means downstream
+
+Unmatched does **not** mean dropped. `convert.py` reads
+`map_traffic_light_id or None` and exports every annotation to `object_ann`,
+pedestrian states included (`db_tlr_state()` maps them to
+`crosswalk_red`/`crosswalk_green`). What an unmatched box lacks is the
+`traffic_light.json` row tying its instance to a map primitive.
+
+Measured on cb7fd5c0: 1562 `object_ann` (80 dropped by the unrelated
+`--drop-source-types` default), of which 969 carry a map link and **593 do
+not**. So an unmatched box still ships as a labelled 2D annotation; it simply
+cannot say which mapped signal it is -- and no reviewer ever saw it.
