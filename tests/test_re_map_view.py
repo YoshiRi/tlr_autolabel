@@ -8,10 +8,14 @@ import numpy as np
 
 from tlr_autolabel.review.re_map_view import (
     build_steps,
+    clip_polyline,
     light_positions,
+    local_road_context,
     quaternion_yaw,
     relevant_lights,
+    round_points,
     summarize,
+    view_bounds,
 )
 
 
@@ -211,6 +215,75 @@ class SummarizeTest(unittest.TestCase):
         self.assertEqual(stats["n_steps"], 0)
         self.assertEqual(stats["n_observations"], 0)
         self.assertEqual(stats["n_unmatched"], 0)
+
+
+class ViewBoundsTest(unittest.TestCase):
+    def test_covers_both_path_and_lights_with_margin(self):
+        steps = [{"x": 0.0, "y": 0.0}, {"x": 10.0, "y": 5.0}]
+        lights = {"a": {"x": -4.0, "y": 20.0}}
+        self.assertEqual(view_bounds(steps, lights, 2.0), (-6.0, -2.0, 12.0, 22.0))
+
+    def test_margin_widens_a_degenerate_box(self):
+        bounds = view_bounds([{"x": 3.0, "y": 3.0}], {}, 5.0)
+        self.assertEqual(bounds, (-2.0, -2.0, 8.0, 8.0))
+
+
+class ClipPolylineTest(unittest.TestCase):
+    BOUNDS = (0.0, 0.0, 10.0, 10.0)
+
+    def test_keeps_polyline_with_a_vertex_inside(self):
+        self.assertTrue(clip_polyline([(-5, -5), (5, 5)], self.BOUNDS))
+
+    def test_drops_polyline_entirely_outside(self):
+        self.assertFalse(clip_polyline([(50, 50), (60, 60)], self.BOUNDS))
+
+    def test_boundary_vertex_counts_as_inside(self):
+        self.assertTrue(clip_polyline([(0, 0)], self.BOUNDS))
+
+    def test_empty_polyline_is_dropped(self):
+        self.assertFalse(clip_polyline([], self.BOUNDS))
+
+
+class RoundPointsTest(unittest.TestCase):
+    def test_rounds_and_converts_to_lists(self):
+        self.assertEqual(round_points([(1.23456, 2.7)], 2), [[1.23, 2.7]])
+
+
+class LocalRoadContextTest(unittest.TestCase):
+    BOUNDS = (0.0, 0.0, 10.0, 10.0)
+
+    def setUp(self):
+        self.lanelets = [
+            {"id": "near", "subtype": "road",
+             "left": [(1.0, 1.0), (2.0, 2.0)], "right": [(1.0, 0.5), (2.0, 1.5)]},
+            {"id": "far", "subtype": "road",
+             "left": [(500.0, 500.0)], "right": [(500.0, 501.0)]},
+        ]
+        self.ways = [
+            {"id": "near_way", "type": "stop_line", "points": [(3.0, 3.0), (4.0, 4.0)]},
+            {"id": "far_way", "type": "stop_line", "points": [(900.0, 900.0)]},
+        ]
+
+    def test_keeps_only_geometry_intersecting_the_bounds(self):
+        lanelets, ways = local_road_context(self.lanelets, self.ways, self.BOUNDS)
+        self.assertEqual([l["id"] for l in lanelets], ["near"])
+        self.assertEqual([w["id"] for w in ways], ["near_way"])
+
+    def test_kept_geometry_is_rounded_to_plain_lists(self):
+        lanelets, _ = local_road_context(self.lanelets, self.ways, self.BOUNDS)
+        self.assertEqual(lanelets[0]["left"], [[1.0, 1.0], [2.0, 2.0]])
+
+    def test_lanelet_kept_when_only_one_bound_is_inside(self):
+        lanelets, _ = local_road_context(
+            [{"id": "half", "subtype": "road",
+              "left": [(5.0, 5.0)], "right": [(900.0, 900.0)]}],
+            [], self.BOUNDS,
+        )
+        self.assertEqual([l["id"] for l in lanelets], ["half"])
+
+    def test_subtype_is_preserved(self):
+        lanelets, _ = local_road_context(self.lanelets, self.ways, self.BOUNDS)
+        self.assertEqual(lanelets[0]["subtype"], "road")
 
 
 if __name__ == "__main__":

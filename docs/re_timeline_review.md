@@ -438,6 +438,11 @@ so no reprojection is involved.
 
 Per frame it draws:
 
+- the surrounding road, so the signal geometry has context to sit in:
+  lanelet polygons (road / road_shoulder / crosswalk / pedestrian_lane) plus
+  `intersection_area`, `crosswalk_polygon` and `stop_line` ways, from
+  `load_lanelet2_context()`. It is a flat background layer and is toggleable,
+  since its only job is to make the markers legible;
 - the whole ego path, plus the current pose with its heading;
 - **filled circle** = a way matched at this frame, coloured by its state;
 - **dashed square** = a way the matcher *proposed* (`map_candidate_id`) and
@@ -448,7 +453,8 @@ Per frame it draws:
 
 The map spans kilometres while a run covers a few hundred metres, so only
 signals referenced by the run plus anything within `--context-radius`
-(default 120 m) are drawn.
+(default 120 m) are drawn, and road geometry is clipped to the box those
+cover -- 155 lanelets of 2535 on cb7fd5c0.
 
 The side panel lists every box at the current frame with its state, way or
 rejected candidate, the regulatory elements of that way, and the ego-to-signal

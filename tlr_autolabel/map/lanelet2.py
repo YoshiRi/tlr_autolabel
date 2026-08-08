@@ -65,3 +65,63 @@ def load_lanelet2_traffic_lights(osm_path: Path):
                 regulatory_by_way[member.get("ref")].append(rel.get("id"))
 
     return traffic_lights, regulatory_by_way
+
+
+# Way types worth drawing as road context. Lane boundaries are skipped: the
+# lanelet polygons below already cover them, and drawing both is unreadable.
+CONTEXT_WAY_TYPES = ("intersection_area", "crosswalk_polygon", "stop_line")
+
+
+def load_lanelet2_context(osm_path: Path, way_types=CONTEXT_WAY_TYPES):
+    """Return (lanelets, ways) for drawing road shape around the ego path.
+
+    lanelets: [{"id", "subtype", "left": [(x, y)...], "right": [(x, y)...]}]
+      -- a drivable/walkable area is the polygon left + reversed(right).
+    ways: [{"id", "type", "points": [(x, y)...]}] for `way_types`.
+
+    Separate from load_lanelet2_traffic_lights() because matching needs only
+    the signals, while visualisation needs the surrounding geometry.
+    """
+    root = ET.parse(osm_path).getroot()
+
+    nodes: dict[str, tuple[float, float]] = {}
+    for node in root.iter("node"):
+        tags = {t.get("k"): t.get("v") for t in node.findall("tag")}
+        if "local_x" in tags and "local_y" in tags:
+            nodes[node.get("id")] = (float(tags["local_x"]), float(tags["local_y"]))
+
+    wanted = set(way_types)
+    way_points: dict[str, list[tuple[float, float]]] = {}
+    context_ways: list[dict] = []
+    for way in root.iter("way"):
+        refs = [nd.get("ref") for nd in way.findall("nd")]
+        pts = [nodes[r] for r in refs if r in nodes]
+        if len(pts) < 2:
+            continue
+        way_points[way.get("id")] = pts
+        tags = {t.get("k"): t.get("v") for t in way.findall("tag")}
+        if tags.get("type") in wanted:
+            context_ways.append(
+                {"id": way.get("id"), "type": tags.get("type"), "points": pts}
+            )
+
+    lanelets: list[dict] = []
+    for rel in root.iter("relation"):
+        tags = {t.get("k"): t.get("v") for t in rel.findall("tag")}
+        if tags.get("type") != "lanelet":
+            continue
+        bounds = {
+            member.get("role"): way_points.get(member.get("ref"))
+            for member in rel.findall("member")
+            if member.get("role") in ("left", "right")
+        }
+        if not bounds.get("left") or not bounds.get("right"):
+            continue
+        lanelets.append({
+            "id": rel.get("id"),
+            "subtype": tags.get("subtype", "") or "",
+            "left": bounds["left"],
+            "right": bounds["right"],
+        })
+
+    return lanelets, context_ways

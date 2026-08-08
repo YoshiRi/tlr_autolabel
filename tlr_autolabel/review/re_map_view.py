@@ -19,7 +19,10 @@ import math
 from collections import Counter, defaultdict
 from pathlib import Path
 
-from tlr_autolabel.map.lanelet2 import load_lanelet2_traffic_lights
+from tlr_autolabel.map.lanelet2 import (
+    load_lanelet2_context,
+    load_lanelet2_traffic_lights,
+)
 from tlr_autolabel.review.re_review_timeline import (
     DEFAULT_CROP_CHANNELS,
     parse_float,
@@ -152,6 +155,49 @@ def relevant_lights(lights: dict[str, dict], steps: list[dict], radius: float) -
     return keep
 
 
+def view_bounds(steps: list[dict], lights: dict, margin: float) -> tuple:
+    """Axis-aligned box covering the ego path and every drawn signal."""
+    xs = [s["x"] for s in steps] + [l["x"] for l in lights.values()]
+    ys = [s["y"] for s in steps] + [l["y"] for l in lights.values()]
+    return (min(xs) - margin, min(ys) - margin, max(xs) + margin, max(ys) + margin)
+
+
+def clip_polyline(points, bounds) -> bool:
+    """True when any vertex falls inside `bounds`.
+
+    Vertex-level rather than exact clipping: road geometry here is dense
+    enough that a segment crossing the box always has a vertex near it, and
+    the alternative is embedding the whole city.
+    """
+    minx, miny, maxx, maxy = bounds
+    return any(minx <= x <= maxx and miny <= y <= maxy for x, y in points)
+
+
+def round_points(points, ndigits: int = 2) -> list:
+    return [[round(x, ndigits), round(y, ndigits)] for x, y in points]
+
+
+def local_road_context(lanelets, ways, bounds) -> tuple[list, list]:
+    """Only the road geometry near the run: the full map is kilometres wide
+    and would dominate the payload."""
+    kept_lanelets = [
+        {
+            "id": lane["id"],
+            "subtype": lane["subtype"],
+            "left": round_points(lane["left"]),
+            "right": round_points(lane["right"]),
+        }
+        for lane in lanelets
+        if clip_polyline(lane["left"], bounds) or clip_polyline(lane["right"], bounds)
+    ]
+    kept_ways = [
+        {"id": way["id"], "type": way["type"], "points": round_points(way["points"])}
+        for way in ways
+        if clip_polyline(way["points"], bounds)
+    ]
+    return kept_lanelets, kept_ways
+
+
 def summarize(steps: list[dict], lights: dict) -> dict:
     per_way = defaultdict(Counter)
     per_cand = defaultdict(Counter)
@@ -237,6 +283,9 @@ def main() -> None:
     lights = relevant_lights(
         light_positions(traffic_lights, regulatory_by_way), steps, args.context_radius
     )
+    lanelets, context_ways = load_lanelet2_context(map_path)
+    bounds = view_bounds(steps, lights, args.context_radius)
+    lanelets, context_ways = local_road_context(lanelets, context_ways, bounds)
     stats = summarize(steps, lights)
 
     subtitle = (
@@ -244,13 +293,16 @@ def main() -> None:
         f"{stats['n_observations']} boxes &middot; "
         f"{stats['n_unmatched']} unmatched &middot; "
         f"{len(stats['matched_ways'])} ways matched / "
-        f"{stats['n_lights_drawn']} drawn of {len(traffic_lights)} in map"
+        f"{stats['n_lights_drawn']} drawn of {len(traffic_lights)} in map &middot; "
+        f"{len(lanelets)} lanelets"
     )
 
     page = (
         PAGE_TEMPLATE.replace("__SUBTITLE__", subtitle)
         .replace("__STEPS__", json.dumps(steps, ensure_ascii=False))
         .replace("__LIGHTS__", json.dumps(list(lights.values()), ensure_ascii=False))
+        .replace("__LANELETS__", json.dumps(lanelets, ensure_ascii=False))
+        .replace("__WAYS__", json.dumps(context_ways, ensure_ascii=False))
         .replace("__STATS__", json.dumps(stats, ensure_ascii=False))
     )
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -259,7 +311,8 @@ def main() -> None:
         f"wrote {output_path} ({stats['n_steps']} frames, "
         f"{stats['n_lights_drawn']} signals drawn, "
         f"{len(stats['matched_ways'])} ways matched, "
-        f"{stats['n_unmatched']} unmatched boxes)"
+        f"{stats['n_unmatched']} unmatched boxes, "
+        f"{len(lanelets)} lanelets + {len(context_ways)} context ways)"
     )
 
 
@@ -316,6 +369,7 @@ PAGE_TEMPLATE = """<!doctype html>
     <button id="nextBtn" type="button">&rarr;</button>
     <button id="playBtn" type="button">Play</button>
     <span class="grow"><input id="slider" type="range" min="0" value="0"></span>
+    <label class="chk"><input type="checkbox" id="showRoad" checked> road</label>
     <label class="chk"><input type="checkbox" id="showRays" checked> rays to observed</label>
     <label class="chk"><input type="checkbox" id="showFacing" checked> facing</label>
     <button id="resetView" type="button">Reset view</button>
@@ -331,6 +385,12 @@ PAGE_TEMPLATE = """<!doctype html>
       <span><i class="swatch" style="background:var(--green)"></i>green</span>
       <span><i class="swatch" style="background:var(--unknown)"></i>unknown / not seen now</span>
       <span>&#9679; matched way &nbsp; &#9633; candidate-only &nbsp; &#183; map context</span>
+      <br>
+      <span><i class="swatch" style="background:#eceff2;border:1px solid #dadfe4"></i>road</span>
+      <span><i class="swatch" style="background:#e4ecf6;border:1px solid #b9cbe4"></i>crosswalk</span>
+      <span><i class="swatch" style="background:#eef3ec;border:1px solid #cfdcca"></i>pedestrian lane</span>
+      <span>dashed purple = intersection area</span>
+      <span>grey line = stop line</span>
       <span>drag to pan, wheel to zoom, &larr;/&rarr; step, space play</span>
     </div>
   </div>
@@ -342,7 +402,16 @@ PAGE_TEMPLATE = """<!doctype html>
 <script>
 const STEPS = __STEPS__;
 const LIGHTS = __LIGHTS__;
+const LANELETS = __LANELETS__;
+const CONTEXT_WAYS = __WAYS__;
 const STATS = __STATS__;
+const LANE_STYLE = {
+  road:           {fill: '#eceff2', stroke: '#dadfe4'},
+  road_shoulder:  {fill: '#f2f4f6', stroke: '#e3e7ea'},
+  crosswalk:      {fill: '#e4ecf6', stroke: '#b9cbe4'},
+  pedestrian_lane:{fill: '#eef3ec', stroke: '#cfdcca'},
+  walkway:        {fill: '#eef3ec', stroke: '#cfdcca'},
+};
 const lightByWay = new Map(LIGHTS.map(l => [l.way, l]));
 let visible = [], pos = 0, playTimer = null;
 let view = null;            // {cx, cy, scale} in map metres
@@ -424,6 +493,7 @@ function draw() {
     else if (o.cand) candSeen.set(o.cand, o);
   }
 
+  if (document.getElementById('showRoad').checked) drawRoad(ctx);
   drawPath(ctx);
   for (const l of LIGHTS) drawLight(ctx, l, stateByWay, candSeen);
   if (document.getElementById('showRays').checked) {
@@ -431,6 +501,55 @@ function draw() {
   }
   drawEgo(ctx, step);
   drawScaleBar(ctx);
+}
+
+// Road first, as a flat background layer: it exists to make the signal
+// geometry legible, so it must never compete with the markers on top.
+function drawRoad(ctx) {
+  for (const lane of LANELETS) {
+    const style = LANE_STYLE[lane.subtype];
+    if (!style) continue;
+    ctx.beginPath();
+    lane.left.forEach(([x, y], n) => {
+      const [px, py] = toCanvas(x, y);
+      n ? ctx.lineTo(px, py) : ctx.moveTo(px, py);
+    });
+    for (let n = lane.right.length - 1; n >= 0; n--) {
+      const [px, py] = toCanvas(lane.right[n][0], lane.right[n][1]);
+      ctx.lineTo(px, py);
+    }
+    ctx.closePath();
+    ctx.fillStyle = style.fill;
+    ctx.fill();
+    ctx.strokeStyle = style.stroke;
+    ctx.lineWidth = 1;
+    ctx.stroke();
+  }
+
+  for (const way of CONTEXT_WAYS) {
+    ctx.beginPath();
+    way.points.forEach(([x, y], n) => {
+      const [px, py] = toCanvas(x, y);
+      n ? ctx.lineTo(px, py) : ctx.moveTo(px, py);
+    });
+    if (way.type === 'intersection_area') {
+      ctx.closePath();
+      ctx.strokeStyle = '#c9b8d8';
+      ctx.lineWidth = 1.5;
+      ctx.setLineDash([5, 4]);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    } else if (way.type === 'crosswalk_polygon') {
+      ctx.closePath();
+      ctx.strokeStyle = '#9fb4d0';
+      ctx.lineWidth = 1;
+      ctx.stroke();
+    } else {
+      ctx.strokeStyle = '#8f98a1';   // stop_line
+      ctx.lineWidth = 2;
+      ctx.stroke();
+    }
+  }
 }
 
 function drawPath(ctx) {
@@ -620,6 +739,7 @@ document.getElementById('playBtn').addEventListener('click', () => setPlaying(!p
 document.getElementById('slider').addEventListener('input', ev => {
   setPlaying(false); show(parseInt(ev.target.value, 10));
 });
+document.getElementById('showRoad').addEventListener('change', draw);
 document.getElementById('showRays').addEventListener('change', draw);
 document.getElementById('showFacing').addEventListener('change', draw);
 document.getElementById('resetView').addEventListener('click', () => {
