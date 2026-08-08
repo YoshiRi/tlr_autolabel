@@ -859,14 +859,18 @@ def main() -> None:
   :root { --bg:#f8f8f6; --panel:#ffffff; --ink:#202428; --muted:#626a73;
     --line:#d8dde2; --red:#c7352b; --amber:#d49716; --green:#27824a;
     --unknown:#9aa3ad; --accent:#2457c5; --bad:#9f2d20;
-    --vis-full:#8fb996; --vis-partial:#d49716; --vis-occluded:#c7352b; --vis-unknown:#c3c9cf; }
+    --vis-full:#8fb996; --vis-partial:#d49716; --vis-occluded:#c7352b; --vis-unknown:#c3c9cf;
+    --aside-w:430px; }
   body { margin:0; background:var(--bg); color:var(--ink);
     font:13px/1.45 system-ui, -apple-system, Segoe UI, sans-serif; }
   header { position:sticky; top:0; z-index:5; padding:12px 16px;
     background:var(--panel); border-bottom:1px solid var(--line); }
   h1 { margin:0 0 2px; font-size:17px; font-weight:650; }
   .sub { color:var(--muted); font-size:12px; }
-  main { display:grid; grid-template-columns:minmax(0,1fr) 430px; gap:0; }
+  main { display:grid; grid-template-columns:minmax(0,1fr) 5px var(--aside-w); gap:0; }
+  .resizer { position:sticky; top:58px; height:calc(100vh - 58px);
+    cursor:col-resize; background:var(--line); touch-action:none; }
+  .resizer:hover, .resizer.dragging { background:var(--accent); }
   #chart { overflow:auto; padding:16px; }
   .row { display:flex; align-items:center; min-width:max-content; margin-bottom:8px; }
   .rowlabel { flex:0 0 230px; padding-right:12px; font-size:12px; }
@@ -947,6 +951,7 @@ def main() -> None:
 </header>
 <main>
   <section id="chart"></section>
+  <div id="resizer" class="resizer" title="Drag to resize; double-click to reset"></div>
   <aside>
     <div class="hint">Click a state segment or a per-camera visibility segment, edit it, then add it to the review JSON.</div>
     <label>Signal group</label>
@@ -1431,8 +1436,20 @@ function onRoiNumberChange() {
   drawRoiCanvas();
 }
 
+// Keep one backing-store pixel per CSS pixel: the panel is resizable, and a
+// mismatch would both blur the image and scale the 8px handle hit-boxes away
+// from where they are drawn.
+function syncRoiCanvasSize(canvas) {
+  const size = Math.max(Math.round(canvas.clientWidth), 200);
+  if (canvas.width !== size) {
+    canvas.width = size;
+    canvas.height = size;
+  }
+}
+
 function drawRoiCanvas() {
   const canvas = document.getElementById('roiCanvas');
+  syncRoiCanvasSize(canvas);
   const ctx = canvas.getContext('2d');
   const win = roiState.win;
   ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -1958,6 +1975,56 @@ if (SAVE_CONFIG) {
   document.getElementById('saveStatus').textContent =
     `draft: ${SAVE_CONFIG.draft_path}${resumed}`;
 }
+
+const ASIDE_DEFAULT_W = 430;
+const ASIDE_MIN_W = 300;
+const CHART_MIN_W = 320;
+
+function setAsideWidth(px) {
+  const max = Math.max(ASIDE_MIN_W, window.innerWidth - CHART_MIN_W);
+  const w = Math.round(Math.min(Math.max(px, ASIDE_MIN_W), max));
+  document.documentElement.style.setProperty('--aside-w', w + 'px');
+  // The ROI canvas scales with the panel, so its backing store has to follow
+  // or the image goes soft and the handle hit-boxes drift off-screen.
+  if (roiState && roiState.img) drawRoiCanvas();
+  return w;
+}
+
+(function initResizer() {
+  const resizer = document.getElementById('resizer');
+  const stored = parseFloat(localStorage.getItem('tlrAsideWidth'));
+  if (Number.isFinite(stored)) setAsideWidth(stored);
+
+  resizer.addEventListener('pointerdown', ev => {
+    ev.preventDefault();
+    resizer.setPointerCapture(ev.pointerId);
+    resizer.classList.add('dragging');
+    document.body.style.userSelect = 'none';
+  });
+  resizer.addEventListener('pointermove', ev => {
+    if (!resizer.hasPointerCapture(ev.pointerId)) return;
+    setAsideWidth(window.innerWidth - ev.clientX);
+  });
+  const endDrag = ev => {
+    if (!resizer.hasPointerCapture(ev.pointerId)) return;
+    resizer.releasePointerCapture(ev.pointerId);
+    resizer.classList.remove('dragging');
+    document.body.style.userSelect = '';
+    const current = document.documentElement.style.getPropertyValue('--aside-w');
+    localStorage.setItem('tlrAsideWidth', parseFloat(current) || ASIDE_DEFAULT_W);
+  };
+  resizer.addEventListener('pointerup', endDrag);
+  resizer.addEventListener('pointercancel', endDrag);
+  resizer.addEventListener('dblclick', () => {
+    setAsideWidth(ASIDE_DEFAULT_W);
+    localStorage.setItem('tlrAsideWidth', ASIDE_DEFAULT_W);
+  });
+  // Re-clamp when the window shrinks below what the stored width allows.
+  window.addEventListener('resize', () => {
+    const current = parseFloat(document.documentElement.style.getPropertyValue('--aside-w'));
+    setAsideWidth(Number.isFinite(current) ? current : ASIDE_DEFAULT_W);
+  });
+})();
 
 loadReview(INITIAL_REVIEW || {});
 renderDecisionList();
