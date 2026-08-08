@@ -418,3 +418,56 @@ Measured on cb7fd5c0: 1562 `object_ann` (80 dropped by the unrelated
 `--drop-source-types` default), of which 969 carry a map link and **593 do
 not**. So an unmatched box still ships as a labelled 2D annotation; it simply
 cannot say which mapped signal it is -- and no reviewer ever saw it.
+
+## Map view (`re_map_view.py`)
+
+Where the frame view shows *what* a box was classified as, this one shows
+*where* it happened: a top-down plot of the ego path with the mapped signals
+around it, so the geometric failure modes (`geometry_mismatch`,
+`beyond_gate`) can be reasoned about at all.
+
+```bash
+python3 -m tlr_autolabel.review.re_map_view --dataset-root data/<dataset>
+# -> build/tl_match/re_map_view.html
+```
+
+Also read-only, also its own HTML. Ego poses come from
+`sample_data.ego_pose_token`, signal geometry from `map/lanelet2_map.osm` via
+`tlr_autolabel.map.lanelet2`; both are already in the same MGRS local frame,
+so no reprojection is involved.
+
+Per frame it draws:
+
+- the whole ego path, plus the current pose with its heading;
+- **filled circle** = a way matched at this frame, coloured by its state;
+- **dashed square** = a way the matcher *proposed* (`map_candidate_id`) and
+  then rejected, coloured by the state the detector read anyway;
+- small dots = other mapped signals, for context only;
+- a short stub per signal showing its `facing_axis`, and optional rays from
+  the ego to everything observed or proposed.
+
+The map spans kilometres while a run covers a few hundred metres, so only
+signals referenced by the run plus anything within `--context-radius`
+(default 120 m) are drawn.
+
+The side panel lists every box at the current frame with its state, way or
+rejected candidate, the regulatory elements of that way, and the ego-to-signal
+distance -- which is what makes a rejection legible.
+
+### What it showed on cb7fd5c0
+
+Only 4 ways were ever matched. The same way is often matched *and* rejected,
+and the distance bands overlap, so distance alone does not explain the
+rejections:
+
+| way 3595 | n | ego distance |
+|---|---|---|
+| matched | 200 | 46.2 – 46.8 m |
+| `candidate_taken` | 122 | 46.2 – 46.6 m |
+| `geometry_mismatch` | 259 | 37.0 – 54.8 m |
+| `beyond_gate` | 44 | 36.1 – 60.4 m |
+
+`beyond_gate` fires at 36 m while matching succeeds at 46 m, and
+`candidate_taken` covers exactly the matched band -- meaning several boxes
+competed for way 3595 in those frames and all but one lost. Way 3595 is
+rejected roughly four times as often as it is matched.
