@@ -299,6 +299,40 @@ def visibility_decision_matches_annotation(decision: dict, ann: dict) -> bool:
     return decision_matches_annotation(decision, ann)
 
 
+def load_reviewed_sidecar(
+    sidecar_path: Path,
+    dataset_root: Path,
+    review_path: Path | None = None,
+    required: bool = False,
+) -> tuple[dict, dict | None]:
+    """Sidecar as the reviewed output would look.
+
+    The read-only views render the sidecar; pointing them at a review file
+    lets a reviewer confirm what their corrections actually produced instead
+    of re-reading the raw detector output. Returns (sidecar, apply summary);
+    the summary is None when no review was applied.
+    """
+    sidecar = json.loads(sidecar_path.read_text())
+    if review_path is None:
+        return sidecar, None
+    if not review_path.exists():
+        # Tolerated only for an optional path the caller nominated (a draft
+        # that may not exist yet); an explicit --review must fail loudly, or a
+        # typo silently shows unreviewed output as if it were reviewed.
+        if required:
+            raise SystemExit(f"review file not found: {review_path}")
+        return sidecar, None
+    review = json.loads(review_path.read_text())
+    sample_ts = timestamps_by_sample(sidecar, dataset_root)
+    reviewed, summary = apply_review(
+        sidecar,
+        normalize_decisions(review, sample_ts),
+        normalize_visibility_decisions(review, sample_ts),
+        normalize_roi_decisions(review),
+    )
+    return reviewed, summary
+
+
 def apply_review(
     sidecar: dict,
     decisions: list[dict],

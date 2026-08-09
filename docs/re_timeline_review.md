@@ -510,3 +510,38 @@ python3 -m tlr_autolabel.review.re_map_view        --dataset-root data/<ds>
 
 Verified on cb7fd5c0: all 137 timeline crop candidates and all 900 ROI-editor
 frames resolve in the frame view, and all 668 frames resolve in the map view.
+
+## Running the three views together (`re_review_all.py`)
+
+Each tool keeps its own entry point, so any one of them can be run and
+debugged alone. The normal workflow uses them together, and that is one
+command:
+
+```bash
+python3 -m tlr_autolabel.review.re_review_all --dataset-root data/<ds>
+# generates all three, then serves them on http://127.0.0.1:8765/
+# --no-serve generates and exits
+```
+
+It also closes the loop that made the views awkward to use for checking
+corrections: **after every commit the two read-only views are regenerated
+against the committed review**, so "Frame view" and "Map view" show what the
+corrections produced rather than the raw detector output. Auto-saving the
+draft deliberately does *not* trigger this -- the views reflect confirmed
+results, not work in progress. On startup the views are built against the
+committed review when one exists, so reopening the workspace continues from
+what was last confirmed.
+
+A failing refresh is reported but never fails the commit: the write already
+succeeded, and that is the part that matters.
+
+The two views take `--review <path>` on their own too, which applies a review
+in memory before rendering (the sidecar on disk is untouched) and marks the
+page header **reviewed** with the counts applied. An explicitly named
+`--review` that does not exist is an error rather than a silent fallback to
+unreviewed output.
+
+Verified on cb7fd5c0: committing a decision that sets one segment to
+`amber-circle` moves the frame view from `unknown: 320` to `unknown: 316,
+amber-circle: 4`, both views gain the reviewed marker, and restarting the
+launcher comes back up already showing the reviewed state.

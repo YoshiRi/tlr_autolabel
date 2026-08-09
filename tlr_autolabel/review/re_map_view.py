@@ -23,6 +23,7 @@ from tlr_autolabel.map.lanelet2 import (
     load_lanelet2_context,
     load_lanelet2_traffic_lights,
 )
+from tlr_autolabel.review.re_apply import load_reviewed_sidecar
 from tlr_autolabel.review.re_review_timeline import (
     DEFAULT_CROP_CHANNELS,
     companion_links,
@@ -226,7 +227,7 @@ def summarize(steps: list[dict], lights: dict) -> dict:
     }
 
 
-def parse_args() -> argparse.Namespace:
+def parse_args(argv=None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dataset-root", default=".", type=Path)
     parser.add_argument(
@@ -246,6 +247,13 @@ def parse_args() -> argparse.Namespace:
         type=float,
         help="draw unreferenced map signals within this distance of the ego path",
     )
+    parser.add_argument(
+        "--review",
+        default=None,
+        type=Path,
+        help="apply this traffic_signal_re_review/v1 file before rendering, to "
+             "confirm what the corrections produced",
+    )
     parser.add_argument("--crop-channels", default=DEFAULT_CROP_CHANNELS)
     parser.add_argument(
         "--output",
@@ -264,11 +272,14 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         help="companion timeline review to link to",
     )
-    return parser.parse_args()
+    return parser.parse_args(argv)
 
 
-def main() -> None:
-    args = parse_args()
+def main(argv=None) -> None:
+    run(parse_args(argv))
+
+
+def run(args: argparse.Namespace) -> None:
     root = args.dataset_root.resolve()
     sidecar_path = args.sidecar if args.sidecar.is_absolute() else root / args.sidecar
     map_path = args.map if args.map.is_absolute() else root / args.map
@@ -278,7 +289,13 @@ def main() -> None:
         if not path.exists():
             raise SystemExit(f"{what} not found: {path}")
 
-    annotations = json.loads(sidecar_path.read_text()).get("annotations", [])
+    review_path = None
+    if args.review is not None:
+        review_path = args.review if args.review.is_absolute() else root / args.review
+    sidecar, apply_summary = load_reviewed_sidecar(
+        sidecar_path, root, review_path, required=args.review is not None
+    )
+    annotations = sidecar.get("annotations", [])
     channels = resolve_crop_channels(
         args.crop_channels,
         {a.get("channel") for a in annotations if a.get("channel")},
@@ -308,6 +325,12 @@ def main() -> None:
         f"{len(stats['matched_ways'])} ways matched / "
         f"{stats['n_lights_drawn']} drawn of {len(traffic_lights)} in map &middot; "
         f"{len(lanelets)} lanelets"
+        + (
+            f" &middot; <b>reviewed</b> ({apply_summary['applied_annotations']} "
+            f"state, {apply_summary['applied_visibility_annotations']} visibility, "
+            f"{apply_summary['applied_roi_annotations']} ROI applied)"
+            if apply_summary else ""
+        )
     )
 
     links = companion_links(

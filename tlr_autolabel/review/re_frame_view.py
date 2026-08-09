@@ -18,6 +18,7 @@ import json
 from collections import Counter, defaultdict
 from pathlib import Path
 
+from tlr_autolabel.review.re_apply import load_reviewed_sidecar
 from tlr_autolabel.review.re_review_timeline import (
     DEFAULT_CROP_CHANNELS,
     companion_links,
@@ -124,7 +125,7 @@ def summarize(frames: list[dict]) -> dict:
     }
 
 
-def parse_args() -> argparse.Namespace:
+def parse_args(argv=None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dataset-root", default=".", type=Path)
     parser.add_argument(
@@ -132,6 +133,13 @@ def parse_args() -> argparse.Namespace:
         default=Path("annotation/traffic_signal_2d_ann.json"),
         type=Path,
         help="A' 2D sidecar to visualise",
+    )
+    parser.add_argument(
+        "--review",
+        default=None,
+        type=Path,
+        help="apply this traffic_signal_re_review/v1 file before rendering, to "
+             "confirm what the corrections produced",
     )
     parser.add_argument(
         "--crop-channels",
@@ -155,18 +163,27 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         help="companion timeline review to link to",
     )
-    return parser.parse_args()
+    return parser.parse_args(argv)
 
 
-def main() -> None:
-    args = parse_args()
+def main(argv=None) -> None:
+    run(parse_args(argv))
+
+
+def run(args: argparse.Namespace) -> None:
     root = args.dataset_root.resolve()
     sidecar_path = args.sidecar if args.sidecar.is_absolute() else root / args.sidecar
     output_path = args.output if args.output.is_absolute() else root / args.output
 
     if not sidecar_path.exists():
         raise SystemExit(f"sidecar not found: {sidecar_path}")
-    annotations = json.loads(sidecar_path.read_text()).get("annotations", [])
+    review_path = None
+    if args.review is not None:
+        review_path = args.review if args.review.is_absolute() else root / args.review
+    sidecar, apply_summary = load_reviewed_sidecar(
+        sidecar_path, root, review_path, required=args.review is not None
+    )
+    annotations = sidecar.get("annotations", [])
     if not annotations:
         raise SystemExit(f"no annotations in {sidecar_path}")
 
@@ -191,6 +208,12 @@ def main() -> None:
         f"{stats['n_annotations']} boxes &middot; "
         f"{stats['n_unmatched']} unmatched to a map RE &middot; "
         f"channels: {html.escape(channel_label)}"
+        + (
+            f" &middot; <b>reviewed</b> ({apply_summary['applied_annotations']} "
+            f"state, {apply_summary['applied_visibility_annotations']} visibility, "
+            f"{apply_summary['applied_roi_annotations']} ROI applied)"
+            if apply_summary else ""
+        )
     )
 
     links = companion_links(

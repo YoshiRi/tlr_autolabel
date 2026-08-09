@@ -597,6 +597,9 @@ class ReviewRequestHandler(SimpleHTTPRequestHandler):
     review_out: Path = Path()
     draft_out: Path = Path()
     root: Path = Path()
+    # Called with the committed path after a successful commit. Used to
+    # regenerate the read-only views against the reviewed output.
+    on_commit = None
 
     def _send_json(self, status: int, body: dict) -> None:
         blob = json.dumps(body).encode()
@@ -656,6 +659,13 @@ class ReviewRequestHandler(SimpleHTTPRequestHandler):
             return
         n_groups = len(payload.get("groups", []))
         print(f"committed {self.review_out} ({n_groups} groups)", flush=True)
+        if self.on_commit is not None:
+            # Never fail the commit because a view failed to redraw: the
+            # write already succeeded and is what matters.
+            try:
+                self.on_commit(self.review_out)
+            except Exception as exc:  # noqa: BLE001 - reported, not raised
+                print(f"post-commit view refresh failed: {exc}", flush=True)
         self._send_json(200, {"ok": True, "path": self._rel(self.review_out)})
 
     def log_message(self, fmt, *args):  # keep the console readable
@@ -663,12 +673,18 @@ class ReviewRequestHandler(SimpleHTTPRequestHandler):
 
 
 def serve_review(
-    root: Path, output_path: Path, review_out: Path, draft_out: Path, port: int
+    root: Path,
+    output_path: Path,
+    review_out: Path,
+    draft_out: Path,
+    port: int,
+    on_commit=None,
 ) -> None:
     handler = functools.partial(ReviewRequestHandler, directory=str(root))
     ReviewRequestHandler.review_out = review_out
     ReviewRequestHandler.draft_out = draft_out
     ReviewRequestHandler.root = root
+    ReviewRequestHandler.on_commit = staticmethod(on_commit) if on_commit else None
     rel_page = os.path.relpath(output_path, root)
     # Bind loopback only: these endpoints write to the dataset.
     with ThreadingHTTPServer(("127.0.0.1", port), handler) as httpd:
@@ -682,7 +698,7 @@ def serve_review(
             print("\nstopped", flush=True)
 
 
-def parse_args() -> argparse.Namespace:
+def parse_args(argv=None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dataset-root", default=".", type=Path)
     parser.add_argument(
@@ -761,11 +777,14 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         help="path --serve writes when the page saves; existing file is backed up to .bak",
     )
-    return parser.parse_args()
+    return parser.parse_args(argv)
 
 
-def main() -> None:
-    args = parse_args()
+def main(argv=None) -> None:
+    run(parse_args(argv))
+
+
+def run(args: argparse.Namespace, on_commit=None) -> None:
     root = args.dataset_root.resolve()
     input_path = args.input if args.input.is_absolute() else root / args.input
     review_path = None
@@ -2132,7 +2151,9 @@ renderChart();
     if args.serve:
         if resumed_from == "draft":
             print(f"resuming from draft {draft_out}", flush=True)
-        serve_review(root, output_path, review_out, draft_out, args.port)
+        serve_review(
+            root, output_path, review_out, draft_out, args.port, on_commit=on_commit
+        )
 
 
 if __name__ == "__main__":
