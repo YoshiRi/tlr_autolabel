@@ -19,6 +19,9 @@ import math
 from collections import Counter, defaultdict
 from pathlib import Path
 
+import yaml
+
+from tlr_autolabel.map.geo import MgrsGridError, local_to_latlon
 from tlr_autolabel.map.lanelet2 import (
     load_lanelet2_context,
     load_lanelet2_traffic_lights,
@@ -157,6 +160,37 @@ def relevant_lights(lights: dict[str, dict], steps: list[dict], radius: float) -
     return keep
 
 
+def load_mgrs_grid(projector_path: Path) -> str | None:
+    """The map's MGRS grid, or None when the map is not MGRS-projected."""
+    if not projector_path.exists():
+        return None
+    info = yaml.safe_load(projector_path.read_text()) or {}
+    if str(info.get("projector_type", "")).upper() != "MGRS":
+        return None
+    return info.get("mgrs_grid") or None
+
+
+def attach_latlon(steps: list[dict], lights: dict, grid: str | None) -> str | None:
+    """Add WGS84 coordinates so the page can link out to Google Maps.
+
+    Returns the grid actually used, or None if the conversion is unavailable --
+    the views stay usable without it, they just lose the external links.
+    """
+    if not grid:
+        return None
+    try:
+        for step in steps:
+            lat, lon = local_to_latlon(step["x"], step["y"], grid)
+            step["lat"], step["lon"] = round(lat, 7), round(lon, 7)
+        for light in lights.values():
+            lat, lon = local_to_latlon(light["x"], light["y"], grid)
+            light["lat"], light["lon"] = round(lat, 7), round(lon, 7)
+    except (MgrsGridError, ValueError) as exc:
+        print(f"skipping geo links: {exc}", flush=True)
+        return None
+    return grid
+
+
 def view_bounds(steps: list[dict], lights: dict, margin: float) -> tuple:
     """Axis-aligned box covering the ego path and every drawn signal."""
     xs = [s["x"] for s in steps] + [l["x"] for l in lights.values()]
@@ -242,6 +276,12 @@ def parse_args(argv=None) -> argparse.Namespace:
         help="lanelet2 map providing traffic-light geometry",
     )
     parser.add_argument(
+        "--map-projector-info",
+        default=Path("map/map_projector_info.yaml"),
+        type=Path,
+        help="map projector info, used to turn map coordinates into lat/lon",
+    )
+    parser.add_argument(
         "--context-radius",
         default=120.0,
         type=float,
@@ -316,6 +356,11 @@ def run(args: argparse.Namespace) -> None:
     lanelets, context_ways = load_lanelet2_context(map_path)
     bounds = view_bounds(steps, lights, args.context_radius)
     lanelets, context_ways = local_road_context(lanelets, context_ways, bounds)
+    projector_path = (
+        args.map_projector_info if args.map_projector_info.is_absolute()
+        else root / args.map_projector_info
+    )
+    grid = attach_latlon(steps, lights, load_mgrs_grid(projector_path))
     stats = summarize(steps, lights)
 
     subtitle = (
@@ -339,6 +384,7 @@ def run(args: argparse.Namespace) -> None:
     page = (
         PAGE_TEMPLATE.replace("__SUBTITLE__", subtitle)
         .replace("__LINKS__", json.dumps(links, ensure_ascii=False))
+        .replace("__GEO__", json.dumps({"grid": grid}, ensure_ascii=False))
         .replace("__STEPS__", json.dumps(steps, ensure_ascii=False))
         .replace("__LIGHTS__", json.dumps(list(lights.values()), ensure_ascii=False))
         .replace("__LANELETS__", json.dumps(lanelets, ensure_ascii=False))
@@ -381,6 +427,11 @@ PAGE_TEMPLATE = """<!doctype html>
   .viewlink { color:var(--accent); text-decoration:none; font-size:12px;
     border:1px solid var(--line); border-radius:4px; padding:5px 9px; }
   .viewlink:hover { border-color:var(--accent); }
+  .viewlink.geo { color:#1a7f4b; }
+  .geolinks { margin-top:4px; display:flex; gap:6px; }
+  .geolinks a { color:#1a7f4b; text-decoration:none; font-size:11px;
+    border:1px solid var(--line); border-radius:3px; padding:1px 5px; }
+  .geolinks a:hover { border-color:#1a7f4b; }
   main { display:grid; grid-template-columns:minmax(0,1fr) 380px; }
   #mapWrap { padding:14px 16px; }
   canvas { display:block; width:100%; background:#fff; border:1px solid var(--line);
@@ -416,6 +467,8 @@ PAGE_TEMPLATE = """<!doctype html>
     <label class="chk"><input type="checkbox" id="showRays" checked> rays to observed</label>
     <label class="chk"><input type="checkbox" id="showFacing" checked> facing</label>
     <button id="resetView" type="button">Reset view</button>
+    <a id="egoMaps" class="viewlink geo" href="#" target="_blank" rel="noopener"
+       style="display:none">Ego on Google Maps &#8599;</a>
     <a id="frameLink" class="viewlink" href="#">Frame view &rarr;</a>
     <a id="timelineLink" class="viewlink" href="#">Timeline review &rarr;</a>
   </div>
@@ -451,6 +504,7 @@ const LANELETS = __LANELETS__;
 const CONTEXT_WAYS = __WAYS__;
 const STATS = __STATS__;
 const LINKS = __LINKS__;
+const GEO = __GEO__;
 const LANE_STYLE = {
   road:           {fill: '#eceff2', stroke: '#dadfe4'},
   road_shoulder:  {fill: '#f2f4f6', stroke: '#e3e7ea'},
@@ -719,11 +773,36 @@ function drawScaleBar(ctx) {
 
 // Companion views follow the frame on screen, so switching view keeps the
 // moment rather than restarting at frame 0.
+function mapsUrl(lat, lon, zoom) {
+  return `https://www.google.com/maps/@${lat},${lon},${zoom || 19}z`;
+}
+
+function panoUrl(lat, lon) {
+  // Street View answers "is there physically a signal here", which the map
+  // alone cannot -- the reason a signal may be missing from lanelet2.
+  return `https://www.google.com/maps/@?api=1&map_action=pano&viewpoint=${lat},${lon}`;
+}
+
+function geoLinks(lat, lon, label) {
+  if (lat === undefined || lat === null) return '';
+  return `<span class="geolinks"><a href="${mapsUrl(lat, lon)}" target="_blank"`
+    + ` rel="noopener" title="${escapeHtml(label)} on Google Maps">map &#8599;</a>`
+    + `<a href="${panoUrl(lat, lon)}" target="_blank" rel="noopener"`
+    + ` title="${escapeHtml(label)} in Street View">street view &#8599;</a></span>`;
+}
+
 function syncViewLinks() {
   const step = currentStep();
   const q = step ? `#ch=${encodeURIComponent(step.channel)}&t=${step.t}` : '';
   document.getElementById('frameLink').href = LINKS.frame_view + q;
   document.getElementById('timelineLink').href = LINKS.timeline + q;
+  const ego = document.getElementById('egoMaps');
+  if (step && step.lat !== undefined) {
+    ego.style.display = '';
+    ego.href = mapsUrl(step.lat, step.lon, 18);
+  } else {
+    ego.style.display = 'none';
+  }
 }
 
 function renderPanel() {
@@ -737,7 +816,11 @@ function renderPanel() {
     + ` &middot; ego (${step.x.toFixed(1)}, ${step.y.toFixed(1)})`
     + ` yaw ${(step.yaw * 180 / Math.PI).toFixed(1)}&deg;`
     + ` &middot; ${step.obs.length} box(es)`
-    + (nUnmatched ? ` &middot; <b>${nUnmatched} unmatched</b>` : '');
+    + (nUnmatched ? ` &middot; <b>${nUnmatched} unmatched</b>` : '')
+    + (step.lat !== undefined
+        ? ` &middot; ${step.lat.toFixed(6)}, ${step.lon.toFixed(6)}`
+          + (GEO.grid ? ` (${escapeHtml(GEO.grid)})` : '')
+        : '');
 
   host.innerHTML = step.obs.map(o => {
     const light = lightByWay.get(o.way || o.cand);
@@ -749,11 +832,12 @@ function renderPanel() {
       ? `way ${escapeHtml(o.way)}`
       : `candidate ${escapeHtml(o.cand || '-')}`;
     const why = o.matched ? '' : `<br>rejected: ${escapeHtml(o.reason || 'n/a')}`;
+    const geo = light ? geoLinks(light.lat, light.lon, `way ${o.way || o.cand}`) : '';
     return `<div class="obs ${o.matched ? '' : 'unmatched'}">`
       + `<span class="st" style="background:${stateColor(o.state)}">`
       + `${escapeHtml(o.state)}</span> ${head}`
       + `<span class="m">RE ${escapeHtml(re)} &middot; ${dist} &middot; `
-      + `kind=${escapeHtml(o.kind || '-')} score=${o.score}${why}</span></div>`;
+      + `kind=${escapeHtml(o.kind || '-')} score=${o.score}${why}</span>${geo}</div>`;
   }).join('') || '<div class="sub">no boxes in this frame</div>';
 }
 

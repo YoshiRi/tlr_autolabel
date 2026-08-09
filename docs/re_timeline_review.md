@@ -460,6 +460,30 @@ The side panel lists every box at the current frame with its state, way or
 rejected candidate, the regulatory elements of that way, and the ego-to-signal
 distance -- which is what makes a rejection legible.
 
+### Locating the site on Google Maps
+
+Map coordinates are metres inside an MGRS square, which says nothing about
+where on earth the data was recorded. `tlr_autolabel/map/geo.py` converts them
+to WGS84 using `map/map_projector_info.yaml`, and the page then offers:
+
+- **"Ego on Google Maps"** in the toolbar, following the current frame;
+- **map** and **street view** links per signal in the side panel;
+- the ego's lat/lon and the grid in the frame info line.
+
+Street View is the useful one for the registration question above: it answers
+"is there physically a signal at this crosswalk", which the lanelet2 map by
+definition cannot.
+
+The conversion is implemented directly rather than via pyproj, which is
+installed on this machine but is *not* in `requirements.txt` -- one inverse UTM
+projection did not justify a new pinned dependency. It agrees with pyproj to
+under a millimetre on the real dataset, and `tests/test_map_geo.py` pins that
+against baked-in reference values (re-derived from pyproj when it is present).
+A map that is not MGRS-projected simply loses the links; nothing else changes.
+
+cb7fd5c0 resolves to 36.4029N, 136.4117E -- Komatsu, Ishikawa -- which matches
+the `Komatsu` in the source bag name and the road signs visible in the frames.
+
 ### What it showed on cb7fd5c0
 
 Only 4 ways were ever matched. The same way is often matched *and* rejected,
