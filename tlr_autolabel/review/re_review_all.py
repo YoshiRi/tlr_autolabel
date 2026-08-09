@@ -8,6 +8,10 @@ including regenerating the read-only views against the committed review after
 every commit, so "Frame view" and "Map view" show what the corrections
 actually produced rather than the raw detector output.
 
+Serving is the default, unlike `re_review_timeline` where `--serve` opts in:
+the commit-then-refresh loop only works over the save endpoint. Pass
+`--no-serve` to just generate the pages.
+
 Each underlying tool keeps its own entry point:
 
     python3 -m tlr_autolabel.review.re_review_timeline --dataset-root <ds> --serve
@@ -100,7 +104,18 @@ def parse_args(argv=None) -> argparse.Namespace:
     parser.add_argument("--context-radius", default=120.0, type=float)
     parser.add_argument("--show-empty-crop-segments", action="store_true")
     parser.add_argument("--port", default=8765, type=int)
-    parser.add_argument(
+    # Serving is the default here, the opposite of re_review_timeline: the
+    # commit-then-refresh loop this launcher exists for only works over the
+    # save endpoint. --serve is accepted anyway so the habit from the single
+    # tool does not fail.
+    serve = parser.add_mutually_exclusive_group()
+    serve.add_argument(
+        "--serve",
+        action="store_true",
+        help="serve the pages (this is the default; accepted for symmetry with "
+             "re_review_timeline --serve)",
+    )
+    serve.add_argument(
         "--no-serve",
         action="store_true",
         help="generate the three pages and exit instead of serving them",

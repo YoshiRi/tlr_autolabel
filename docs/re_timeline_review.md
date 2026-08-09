@@ -523,6 +523,12 @@ python3 -m tlr_autolabel.review.re_review_all --dataset-root data/<ds>
 # --no-serve generates and exits
 ```
 
+Note the inverted default: `re_review_timeline` needs `--serve` to opt in,
+whereas the launcher serves unless told not to, because the
+commit-then-refresh loop below only works over the save endpoint. `--serve` is
+accepted explicitly anyway so the habit from the single tool does not fail;
+passing both `--serve` and `--no-serve` is rejected.
+
 It also closes the loop that made the views awkward to use for checking
 corrections: **after every commit the two read-only views are regenerated
 against the committed review**, so "Frame view" and "Map view" show what the

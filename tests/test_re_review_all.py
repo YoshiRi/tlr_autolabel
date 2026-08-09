@@ -48,6 +48,15 @@ class TimelineArgvTest(unittest.TestCase):
         self.assertIn("--frame-view", argv)
         self.assertIn("--map-view", argv)
 
+    def test_explicit_serve_still_serves(self):
+        # Accepted for symmetry with re_review_timeline --serve, where serving
+        # is opt-in rather than the default.
+        self.assertIn("--serve", timeline_argv(parse_args(["--serve"])))
+
+    def test_serve_and_no_serve_together_are_rejected(self):
+        with self.assertRaises(SystemExit):
+            parse_args(["--serve", "--no-serve"])
+
     def test_show_empty_crop_segments_is_forwarded_only_when_set(self):
         self.assertNotIn("--show-empty-crop-segments", timeline_argv(parse_args([])))
         self.assertIn(
