@@ -4,6 +4,7 @@
 import unittest
 
 from tlr_autolabel.review.re_apply import (
+    ReviewValidationError,
     apply_review,
     normalize_box2d,
     normalize_roi_decisions,
@@ -68,7 +69,7 @@ class NormalizeRoiDecisionsTest(unittest.TestCase):
                 "roi_decisions": [{"box2d": [1, 2, 3, 4], "review_status": "fixed"}],
             }],
         }
-        with self.assertRaises(SystemExit):
+        with self.assertRaises(ReviewValidationError):
             normalize_roi_decisions(review)
 
     def test_invalid_box2d_fails_loud(self):
@@ -80,7 +81,7 @@ class NormalizeRoiDecisionsTest(unittest.TestCase):
                 }],
             }],
         }
-        with self.assertRaises(SystemExit):
+        with self.assertRaises(ReviewValidationError):
             normalize_roi_decisions(review)
 
     def test_invalid_review_status_fails_loud(self):
@@ -92,7 +93,7 @@ class NormalizeRoiDecisionsTest(unittest.TestCase):
                 }],
             }],
         }
-        with self.assertRaises(SystemExit):
+        with self.assertRaises(ReviewValidationError):
             normalize_roi_decisions(review)
 
     def test_group_without_roi_decisions_is_skipped(self):

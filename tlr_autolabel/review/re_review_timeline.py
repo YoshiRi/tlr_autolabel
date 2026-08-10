@@ -21,6 +21,11 @@ from collections import Counter, defaultdict
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+from tlr_autolabel.review.re_apply import (
+    timestamps_by_sample,
+    validate_review_semantics,
+)
+
 DRAFT_ENDPOINT = "/__save_draft"
 COMMIT_ENDPOINT = "/__commit_review"
 DIFF_ENDPOINT = "/__review_diff"
@@ -597,6 +602,8 @@ class ReviewRequestHandler(SimpleHTTPRequestHandler):
     review_out: Path = Path()
     draft_out: Path = Path()
     root: Path = Path()
+    # sample_token -> timestamp, needed to validate decisions semantically.
+    sample_ts: dict = {}
     # Called with the committed path after a successful commit. Used to
     # regenerate the read-only views against the reviewed output.
     on_commit = None
@@ -637,8 +644,21 @@ class ReviewRequestHandler(SimpleHTTPRequestHandler):
                 "path": self._rel(self.review_out),
                 "committed_exists": self.review_out.exists(),
                 "diff": diff_reviews(committed, payload),
+                # Surfaced in the dialog so the reviewer sees why Commit is
+                # disabled instead of getting a 400 after pressing it.
+                "problem": validate_review_semantics(payload, self.sample_ts),
             })
             return
+
+        if self.path == COMMIT_ENDPOINT:
+            # The commit endpoint is the boundary of the reviewed artifact:
+            # everything downstream (apply, export, the view refresh) assumes
+            # what it produced is applicable, so reject here rather than let a
+            # bad state token reach the file.
+            problem = validate_review_semantics(payload, self.sample_ts)
+            if problem:
+                self._send_json(400, {"ok": False, "error": problem})
+                return
 
         if self.path == DRAFT_ENDPOINT:
             try:
@@ -664,7 +684,7 @@ class ReviewRequestHandler(SimpleHTTPRequestHandler):
             # write already succeeded and is what matters.
             try:
                 self.on_commit(self.review_out)
-            except Exception as exc:  # noqa: BLE001 - reported, not raised
+            except (Exception, SystemExit) as exc:  # noqa: BLE001 - reported
                 print(f"post-commit view refresh failed: {exc}", flush=True)
         self._send_json(200, {"ok": True, "path": self._rel(self.review_out)})
 
@@ -679,11 +699,13 @@ def serve_review(
     draft_out: Path,
     port: int,
     on_commit=None,
+    sample_ts: dict | None = None,
 ) -> None:
     handler = functools.partial(ReviewRequestHandler, directory=str(root))
     ReviewRequestHandler.review_out = review_out
     ReviewRequestHandler.draft_out = draft_out
     ReviewRequestHandler.root = root
+    ReviewRequestHandler.sample_ts = sample_ts or {}
     ReviewRequestHandler.on_commit = staticmethod(on_commit) if on_commit else None
     rel_page = os.path.relpath(output_path, root)
     # Bind loopback only: these endpoints write to the dataset.
@@ -984,6 +1006,10 @@ def run(args: argparse.Namespace, on_commit=None) -> None:
     letter-spacing:.05em; margin-right:6px; }
   .diffEntry .before { color:var(--bad); text-decoration:line-through; }
   .diffEntry .after { color:var(--green); }
+  .diffProblem { border:1px solid var(--bad); border-left-width:4px;
+    border-radius:4px; background:#fdf6f5; color:var(--bad); padding:9px 11px;
+    margin-bottom:12px; font-size:12px; white-space:pre-wrap; }
+  .diffProblem b { display:block; margin-bottom:4px; }
   .roiEditor { border:1px solid var(--line); border-radius:4px; background:#fafafa;
     padding:8px; margin-top:8px; }
   .roiEditor canvas { display:block; width:100%; aspect-ratio:1/1; background:#111;
@@ -1115,6 +1141,9 @@ let selected = null;
 let decisions = new Map();
 let visDecisions = new Map();
 let roiDecisions = new Map();
+// signal_group_id -> identity, for groups the chart does not show (hidden by
+// hide_segments_without_crops, or present only in a loaded review file).
+let groupMeta = new Map();
 let evidenceIndex = 0;
 let roiState = null;
 const ROI_CURSORS = {
@@ -1229,8 +1258,16 @@ function loadReview(payload) {
   decisions = new Map();
   visDecisions = new Map();
   roiDecisions = new Map();
+  groupMeta = new Map();
   for (const group of payload.groups || []) {
     const gid = group.signal_group_id;
+    // Keep identity for every group in the file, not just the visible ones:
+    // buildPayload() needs it to write hidden groups back out unchanged.
+    groupMeta.set(gid, {
+      signal_group_id: gid,
+      member_ways: group.member_ways || [],
+      regulatory_element_ids: group.regulatory_element_ids || [],
+    });
     for (const d of group.decisions || group.segments || []) {
       const k = `${gid}|${d.start_sample_token}|${d.end_sample_token || d.start_sample_token}`;
       decisions.set(k, {...d, signal_group_id: gid});
@@ -1795,24 +1832,40 @@ function buildPayload() {
       roi_decisions: [],
     });
   }
+  // What the chart shows is a display filter, not the persistence model: a
+  // group hidden by hide_segments_without_crops (or one that only exists in
+  // the loaded file) must survive the next save rather than be dropped.
+  function groupFor(gid) {
+    let group = byGroup.get(gid);
+    if (!group) {
+      const meta = groupMeta.get(gid) || {};
+      group = {
+        signal_group_id: gid,
+        member_ways: meta.member_ways || [],
+        regulatory_element_ids: meta.regulatory_element_ids || [],
+        decisions: [],
+        visibility_decisions: {},
+        roi_decisions: [],
+      };
+      byGroup.set(gid, group);
+    }
+    return group;
+  }
   for (const decision of decisions.values()) {
-    const group = byGroup.get(decision.signal_group_id);
-    if (!group) continue;
+    const group = groupFor(decision.signal_group_id);
     const clean = {...decision};
     delete clean.signal_group_id;
     group.decisions.push(clean);
   }
   for (const decision of visDecisions.values()) {
-    const group = byGroup.get(decision.signal_group_id);
-    if (!group) continue;
+    const group = groupFor(decision.signal_group_id);
     const clean = {...decision};
     delete clean.signal_group_id;
     delete clean.channel;
     (group.visibility_decisions[decision.channel] ||= []).push(clean);
   }
   for (const decision of roiDecisions.values()) {
-    const group = byGroup.get(decision.signal_group_id);
-    if (!group) continue;
+    const group = groupFor(decision.signal_group_id);
     const clean = {...decision};
     delete clean.signal_group_id;
     group.roi_decisions.push(clean);
@@ -1933,10 +1986,17 @@ function escapeHtml(text) {
   return div.innerHTML;
 }
 
-function renderDiff(diff, committedExists, path) {
+function renderDiff(diff, committedExists, path, problem) {
   const body = document.getElementById('diffBody');
   document.getElementById('diffTarget').textContent =
     (committedExists ? 'updates ' : 'creates ') + path;
+  if (problem) {
+    // The server rejects this document, so say why here rather than let the
+    // reviewer press Commit and take a 400.
+    body.innerHTML = `<div class="diffProblem"><b>Cannot commit</b>`
+      + `${escapeHtml(problem)}</div>`;
+    return;
+  }
   if (!diff.total) {
     body.innerHTML = '<div class="hint">No differences: the committed file '
       + 'already matches what is staged.</div>';
@@ -1968,8 +2028,8 @@ async function openCommitDialog() {
   overlay.style.display = '';
   try {
     const res = await postReview(SAVE_CONFIG.diff_endpoint);
-    renderDiff(res.diff, res.committed_exists, res.path);
-    confirm.disabled = false;
+    renderDiff(res.diff, res.committed_exists, res.path, res.problem);
+    confirm.disabled = Boolean(res.problem);
   } catch (err) {
     body.innerHTML = `<div class="hint">diff failed: ${escapeHtml(err.message)}</div>`;
   }
@@ -2152,7 +2212,15 @@ renderChart();
         if resumed_from == "draft":
             print(f"resuming from draft {draft_out}", flush=True)
         serve_review(
-            root, output_path, review_out, draft_out, args.port, on_commit=on_commit
+            root,
+            output_path,
+            review_out,
+            draft_out,
+            args.port,
+            on_commit=on_commit,
+            sample_ts=timestamps_by_sample(
+                {"annotations": sidecar_annotations}, root
+            ),
         )
 
 

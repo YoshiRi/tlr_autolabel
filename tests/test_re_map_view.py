@@ -3,11 +3,13 @@
 """
 import math
 import unittest
+from pathlib import Path
 
 import numpy as np
 
 from tlr_autolabel.review.re_map_view import (
     build_steps,
+    ego_poses_by_sample_data,
     clip_polyline,
     light_positions,
     local_road_context,
@@ -215,6 +217,44 @@ class SummarizeTest(unittest.TestCase):
         self.assertEqual(stats["n_steps"], 0)
         self.assertEqual(stats["n_observations"], 0)
         self.assertEqual(stats["n_unmatched"], 0)
+
+
+class EgoPosesFromDatasetTest(unittest.TestCase):
+    """Ego poses come from T4Dataset's pre-joined camera frames rather than a
+    second hand-rolled read of ego_pose.json / sample_data.json."""
+
+    def _dataset(self, frames):
+        from tlr_autolabel.t4.dataset import T4Dataset
+        return T4Dataset(root=Path("/ds"), camera_frames_by_token=frames)
+
+    def _frame(self, token="sd1", translation=(5.0, 6.0, 1.0), rotation=(1, 0, 0, 0),
+               timestamp=100):
+        from tlr_autolabel.t4.dataset import CameraFrame
+        return CameraFrame(
+            sample_data={"token": token, "filename": "data/CAM_A/0.jpg"},
+            ego_pose={"translation": list(translation), "rotation": list(rotation),
+                      "timestamp": timestamp},
+            calibrated_sensor={},
+            channel="CAM_A",
+        )
+
+    def test_projects_translation_and_heading(self):
+        poses = ego_poses_by_sample_data(self._dataset({"sd1": self._frame()}))
+        self.assertEqual(poses["sd1"]["x"], 5.0)
+        self.assertEqual(poses["sd1"]["y"], 6.0)
+        self.assertAlmostEqual(poses["sd1"]["yaw"], 0.0)
+        self.assertEqual(poses["sd1"]["t"], 100)
+
+    def test_frame_without_an_ego_pose_is_skipped(self):
+        frame = self._frame()
+        frame.ego_pose = {}
+        self.assertEqual(ego_poses_by_sample_data(self._dataset({"sd1": frame})), {})
+
+    def test_keys_are_sample_data_tokens(self):
+        frames = {"sdA": self._frame("sdA"), "sdB": self._frame("sdB")}
+        self.assertEqual(
+            sorted(ego_poses_by_sample_data(self._dataset(frames))), ["sdA", "sdB"]
+        )
 
 
 class ViewBoundsTest(unittest.TestCase):

@@ -4,6 +4,7 @@
 import unittest
 
 from tlr_autolabel.review.re_apply import (
+    ReviewValidationError,
     apply_review,
     normalize_visibility_decisions,
     visibility_decision_matches_annotation,
@@ -53,7 +54,7 @@ class NormalizeVisibilityDecisionsTest(unittest.TestCase):
                 },
             }],
         }
-        with self.assertRaises(SystemExit):
+        with self.assertRaises(ReviewValidationError):
             normalize_visibility_decisions(review, {})
 
     def test_group_without_visibility_decisions_is_skipped(self):

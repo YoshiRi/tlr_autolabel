@@ -23,6 +23,15 @@ from pathlib import Path
 from tlr_autolabel.core.state_tokens import CANON_RE, LEGACY_RE, elements_key, parse_state
 from tlr_autolabel.core.io import load_json
 
+class ReviewValidationError(ValueError):
+    """A review document is structurally valid JSON but semantically wrong.
+
+    A plain exception rather than SystemExit so callers that are not a CLI --
+    the save endpoint, the post-commit view refresh -- can catch it. The CLI
+    entry points convert it back into SystemExit for a clean exit.
+    """
+
+
 VALID_REVIEW_STATUS = {"unchecked", "accepted", "rejected", "fixed"}
 APPLY_STATUSES = {"accepted", "rejected", "fixed"}
 VALID_VISIBILITY = {"full", "partial", "occluded", "unknown"}
@@ -138,7 +147,9 @@ def normalize_decisions(review: dict, sample_ts: dict[str, int]) -> list[dict]:
             )
     if errors:
         detail = "\n  ".join(errors)
-        raise SystemExit(f"review validation failed, {len(errors)} problem(s):\n  {detail}")
+        raise ReviewValidationError(
+            f"review validation failed, {len(errors)} problem(s):\n  {detail}"
+        )
     return decisions
 
 
@@ -208,7 +219,9 @@ def normalize_visibility_decisions(review: dict, sample_ts: dict[str, int]) -> l
                 )
     if errors:
         detail = "\n  ".join(errors)
-        raise SystemExit(f"review validation failed, {len(errors)} problem(s):\n  {detail}")
+        raise ReviewValidationError(
+            f"review validation failed, {len(errors)} problem(s):\n  {detail}"
+        )
     return decisions
 
 
@@ -269,7 +282,9 @@ def normalize_roi_decisions(review: dict) -> list[dict]:
             )
     if errors:
         detail = "\n  ".join(errors)
-        raise SystemExit(f"review validation failed, {len(errors)} problem(s):\n  {detail}")
+        raise ReviewValidationError(
+            f"review validation failed, {len(errors)} problem(s):\n  {detail}"
+        )
     return decisions
 
 
@@ -324,13 +339,28 @@ def load_reviewed_sidecar(
         return sidecar, None
     review = json.loads(review_path.read_text())
     sample_ts = timestamps_by_sample(sidecar, dataset_root)
-    reviewed, summary = apply_review(
-        sidecar,
-        normalize_decisions(review, sample_ts),
-        normalize_visibility_decisions(review, sample_ts),
-        normalize_roi_decisions(review),
-    )
-    return reviewed, summary
+    try:
+        decisions = normalize_decisions(review, sample_ts)
+        visibility = normalize_visibility_decisions(review, sample_ts)
+        roi = normalize_roi_decisions(review)
+    except ReviewValidationError as exc:
+        raise SystemExit(f"{review_path}: {exc}") from exc
+    return apply_review(sidecar, decisions, visibility, roi)
+
+
+def validate_review_semantics(review: dict, sample_ts: dict[str, int]) -> str | None:
+    """Everything `validate_review_payload` cannot see: state vocabulary,
+    review_status values, box2d shape, group identity.
+
+    Returns an error message, or None when the document would apply cleanly.
+    """
+    try:
+        normalize_decisions(review, sample_ts)
+        normalize_visibility_decisions(review, sample_ts)
+        normalize_roi_decisions(review)
+    except ReviewValidationError as exc:
+        return str(exc)
+    return None
 
 
 def apply_review(
@@ -442,9 +472,12 @@ def main() -> None:
         )
 
     sample_ts = timestamps_by_sample(sidecar, root)
-    decisions = normalize_decisions(review, sample_ts)
-    visibility_decisions = normalize_visibility_decisions(review, sample_ts)
-    roi_decisions = normalize_roi_decisions(review)
+    try:
+        decisions = normalize_decisions(review, sample_ts)
+        visibility_decisions = normalize_visibility_decisions(review, sample_ts)
+        roi_decisions = normalize_roi_decisions(review)
+    except ReviewValidationError as exc:
+        raise SystemExit(f"{review_path}: {exc}") from exc
     reviewed, summary = apply_review(sidecar, decisions, visibility_decisions, roi_decisions)
 
     print(

@@ -337,7 +337,12 @@ what `apply_re_review.py` and L6 consume. Continuous writes to that file would
 mean any half-finished session silently becomes the reviewed output. Splitting
 them makes crash recovery free without ever publishing unverified state.
 
-**Auto-save is on by default** and targets the draft only: every staged change
+**The normalizers raise `ReviewValidationError` (a `ValueError`) rather than
+`SystemExit`, so non-CLI callers -- the save endpoint and the post-commit view
+refresh -- can catch them; the CLI entry points convert it back to `SystemExit`
+for a clean exit.
+
+Auto-save is on by default** and targets the draft only: every staged change
 (state, visibility, ROI, and JSON import) lands within about half a second, so
 an interrupted session loses nothing. The "auto-save draft on every change"
 checkbox turns it off; turning it back on flushes what is already staged.
@@ -352,6 +357,11 @@ Comparison ignores derived bookkeeping (`source`, `n_frames`); only `state` /
 On load the page prefers the draft, falling back to the committed file, so
 reopening resumes exactly where you stopped. `--review` overrides both.
 
+What the timeline *charts* is a display filter, not the persistence model: a
+signal group hidden by `hide_segments_without_crops()`, or one present only in
+a loaded review file, keeps its decisions through the next save rather than
+being silently dropped by a save made while it was off-screen.
+
 Other guarantees:
 
 - the commit target is `--review-out`, default
@@ -360,6 +370,14 @@ Other guarantees:
   generation of backup at `<target>.bak`, the draft does not need one;
 - every endpoint rejects payloads that are not `traffic_signal_re_review/v1`,
   so a stray request cannot truncate either file;
+- **commit additionally validates semantics** -- state vocabulary,
+  `review_status`, `box2d` shape, group identity -- by running the same
+  `normalize_*` pass that apply/export use. The commit endpoint is the boundary
+  of the reviewed artifact, so an invalid document is rejected there rather than
+  written atomically and only discovered later. The diff dialog shows the
+  problems and disables Commit, so the reviewer sees why before pressing. Draft
+  auto-save deliberately skips this check: work in progress is allowed to be
+  half-finished, and blocking it would fight the reviewer;
 - bursts of edits coalesce into one write and saves never overlap, so the draft
   cannot end up behind the UI from an out-of-order response;
 - the server binds `127.0.0.1` only, since these endpoints write to the dataset.

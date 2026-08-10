@@ -22,6 +22,7 @@ from pathlib import Path
 import yaml
 
 from tlr_autolabel.map.geo import MgrsGridError, local_to_latlon
+from tlr_autolabel.t4.dataset import T4Dataset
 from tlr_autolabel.map.lanelet2 import (
     load_lanelet2_context,
     load_lanelet2_traffic_lights,
@@ -43,19 +44,19 @@ def quaternion_yaw(rotation) -> float:
     return math.atan2(2.0 * (w * z + x * y), 1.0 - 2.0 * (y * y + z * z))
 
 
-def load_ego_by_sample_data(dataset_root: Path) -> dict[str, dict]:
-    """sample_data_token -> ego pose, the link annotations already carry."""
-    ego_by_token = {
-        row["token"]: row
-        for row in json.loads((dataset_root / "annotation/ego_pose.json").read_text())
-    }
+def ego_poses_by_sample_data(dataset: T4Dataset) -> dict[str, dict]:
+    """sample_data_token -> ego pose, the link annotations already carry.
+
+    Uses T4Dataset's pre-joined camera frames rather than re-reading
+    ego_pose.json/sample_data.json, so table handling stays in one place.
+    """
     out: dict[str, dict] = {}
-    for row in json.loads((dataset_root / "annotation/sample_data.json").read_text()):
-        pose = ego_by_token.get(row.get("ego_pose_token"))
+    for token, frame in dataset.camera_frames_by_token.items():
+        pose = frame.ego_pose
         if not pose:
             continue
         translation = pose.get("translation") or [0.0, 0.0, 0.0]
-        out[row["token"]] = {
+        out[token] = {
             "x": float(translation[0]),
             "y": float(translation[1]),
             "yaw": quaternion_yaw(pose.get("rotation")),
@@ -340,7 +341,7 @@ def run(args: argparse.Namespace) -> None:
         args.crop_channels,
         {a.get("channel") for a in annotations if a.get("channel")},
     )
-    ego_by_sample_data = load_ego_by_sample_data(root)
+    ego_by_sample_data = ego_poses_by_sample_data(T4Dataset.load(root))
     steps = build_steps(annotations, ego_by_sample_data, channels)
     if not steps:
         raise SystemExit(

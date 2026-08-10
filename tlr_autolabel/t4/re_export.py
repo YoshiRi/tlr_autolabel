@@ -28,6 +28,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 from tlr_autolabel.review.re_apply import (
+    ReviewValidationError,
     apply_review,
     normalize_decisions,
     normalize_roi_decisions,
@@ -203,6 +204,13 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> None:
+    try:
+        _main()
+    except ReviewValidationError as exc:
+        raise SystemExit(str(exc)) from exc
+
+
+def _main() -> None:
     args = parse_args()
     args.dataset_root = args.dataset_root.resolve()
     args.out = args.out.resolve()
