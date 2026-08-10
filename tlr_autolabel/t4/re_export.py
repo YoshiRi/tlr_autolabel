@@ -27,7 +27,14 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
-from tlr_autolabel.review.re_apply import apply_review, normalize_decisions, timestamps_by_sample
+from tlr_autolabel.review.re_apply import (
+    ReviewValidationError,
+    apply_review,
+    normalize_decisions,
+    normalize_roi_decisions,
+    normalize_visibility_decisions,
+    timestamps_by_sample,
+)
 from tlr_autolabel.review.re_template import build_template
 
 APPLY_STATUSES = {"accepted", "fixed", "rejected"}
@@ -197,6 +204,13 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> None:
+    try:
+        _main()
+    except ReviewValidationError as exc:
+        raise SystemExit(str(exc)) from exc
+
+
+def _main() -> None:
     args = parse_args()
     args.dataset_root = args.dataset_root.resolve()
     args.out = args.out.resolve()
@@ -204,6 +218,8 @@ def main() -> None:
     sidecar_path = resolve_path(args.dataset_root, args.sidecar)
     sidecar = load_json(sidecar_path)
 
+    visibility_decisions: list[dict] = []
+    roi_decisions: list[dict] = []
     if args.timeseries:
         timeseries_path = resolve_path(args.dataset_root, args.timeseries)
         decisions = decisions_from_timeseries(
@@ -220,16 +236,23 @@ def main() -> None:
             raise SystemExit(
                 "no RE review file found; pass --review or --timeseries explicitly"
             )
+        review = load_json(review_path)
         decisions = decisions_from_review(
-            load_json(review_path),
+            review,
             sidecar,
             args.dataset_root,
             args.unchecked_as,
         )
+        # visibility_decisions and roi_decisions only exist in the
+        # traffic_signal_re_review/v1 schema, not the legacy timeseries source.
+        visibility_decisions = normalize_visibility_decisions(
+            review, timestamps_by_sample(sidecar, args.dataset_root)
+        )
+        roi_decisions = normalize_roi_decisions(review)
         source_desc = str(review_path)
 
     decision_summary = summarize_decisions(decisions)
-    reviewed, apply_summary = apply_review(sidecar, decisions)
+    reviewed, apply_summary = apply_review(sidecar, decisions, visibility_decisions, roi_decisions)
     if not args.allow_empty_application:
         if decision_summary["apply_decisions"] == 0:
             raise SystemExit(
@@ -249,7 +272,8 @@ def main() -> None:
             f"apply_decisions={decision_summary['apply_decisions']} "
             f"by_status={decision_summary['by_status']} "
             f"applied_annotations={apply_summary['applied_annotations']} "
-            f"overlaps={apply_summary['overlapping_annotation_matches']}",
+            f"overlaps={apply_summary['overlapping_annotation_matches']} "
+            f"applied_roi_annotations={apply_summary['applied_roi_annotations']}",
             flush=True,
         )
         run_to_object_ann(args, temp_path)
