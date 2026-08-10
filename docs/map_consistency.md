@@ -108,3 +108,43 @@ Re-run against the new map and compare. `image_only` falling toward zero is the
 signal that the missing entries were added; `map_only` and
 `signal_never_observed` appearing is the signal that something was added that
 is not really there.
+
+## Seeing the findings on the map
+
+The report is a number; the map view is where you go to understand it. Pass it
+in and the findings are overlaid on the frames that produced them:
+
+```bash
+python3 -m tlr_autolabel.review.re_map_view --dataset-root data/<ds> \
+  --consistency build/tl_match/map_consistency.json
+```
+
+- a `map_only` way is **ringed in red** on the frame where it went unobserved;
+- `image_only` boxes have no map position by definition -- there is nothing to
+  draw them at -- so they are reported as a count beside the ego, with the
+  details in the side panel;
+- the side panel carries the run-level findings plus, per frame, why each one
+  fired: for an `image_only` box, the nearest projected way and how far away it
+  is, which is what separates "the map has this signal in the wrong place" from
+  "the map does not have this signal";
+- a *consistency findings* toggle turns the overlay off.
+
+Without `--consistency` the map view is exactly as it was. Naming a report that
+does not exist is an error rather than a silent fallback, so a typo cannot look
+like a clean run.
+
+## Running the whole thing
+
+`re_review_all` does the check as part of the normal workflow and wires the
+report into the map view for you:
+
+```bash
+python3 -m tlr_autolabel.review.re_review_all --dataset-root data/<ds>
+# writes build/tl_match/map_consistency.json, then the three pages
+# --no-consistency  skips the check and its overlay
+```
+
+The check is skipped rather than fatal when the dataset has no lanelet2 map --
+the views are still worth having. Both the check and the views accept
+`--review`, so after committing corrections the consistency numbers describe
+the reviewed output rather than the raw detections.

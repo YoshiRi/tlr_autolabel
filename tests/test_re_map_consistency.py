@@ -1,9 +1,13 @@
 """Unit tests for the map/image consistency check
 (tlr_autolabel/review/re_map_consistency.py).
 """
+import math
 import unittest
 
+import numpy as np
+
 from tlr_autolabel.review.re_map_consistency import (
+    analyse,
     associate,
     association_radius,
     box_center,
@@ -259,6 +263,110 @@ class FindWarningsTest(unittest.TestCase):
             **DEFAULTS,
         )
         self.assertEqual(len(found), 1)
+
+
+# Minimal scene that actually exercises project_traffic_lights(): ego at the
+# origin, camera rotated so its optical axis looks along map +y, and one signal
+# 30 m ahead facing back at the ego.
+CAMERA_TO_BASE = [math.sqrt(0.5), -math.sqrt(0.5), 0.0, 0.0]   # -90 deg about x
+INTRINSIC = [[1000.0, 0.0, 500.0], [0.0, 1000.0, 500.0], [0.0, 0.0, 1.0]]
+
+
+def scene_light(facing_axis=(0.0, -1.0), y=30.0):
+    corners = np.array([
+        [-0.2, y, 4.8], [0.2, y, 4.8], [-0.2, y, 5.2], [0.2, y, 5.2],
+    ])
+    return {"3281": {
+        "corners": corners, "subtype": "", "height": 0.4,
+        "facing_axis": None if facing_axis is None else np.array(facing_axis),
+    }}
+
+
+class FakeFrame:
+    def __init__(self, token, channel="CAM_A", timestamp=1000):
+        self.sample_data = {"token": token, "width": 1000, "height": 1000,
+                            "filename": f"data/{channel}/0.jpg"}
+        self.ego_pose = {"translation": [0.0, 0.0, 0.0],
+                         "rotation": [1.0, 0.0, 0.0, 0.0], "timestamp": timestamp}
+        self.calibrated_sensor = {"translation": [0.0, 0.0, 0.0],
+                                  "rotation": CAMERA_TO_BASE,
+                                  "camera_intrinsic": INTRINSIC}
+        self.channel = channel
+        self.timestamp = timestamp
+
+
+class FakeDataset:
+    def __init__(self, frames):
+        self.camera_frames_by_token = frames
+
+
+def scene_annotation(token="sd1", box=(470, 300, 530, 360), state="red-circle"):
+    return {
+        "token": "ann1",
+        "sample_data_token": token,
+        "box2d": list(box),
+        "attributes": {"state": state, "detector_score": "0.9",
+                       "signal_kind": "vehicle"},
+    }
+
+
+def run_analyse(annotations, lights=None):
+    return analyse(
+        FakeDataset({"sd1": FakeFrame("sd1")}),
+        scene_light() if lights is None else lights,
+        annotations,
+        None, 120.0, 60.0, 2.0, 0.3,
+    )
+
+
+class AnalyseTest(unittest.TestCase):
+    def test_detection_on_the_projection_pairs(self):
+        report = run_analyse([scene_annotation()])
+        self.assertEqual(report["frames"], 1)
+        self.assertEqual(report["paired"], 1)
+        self.assertEqual((report["map_only"], report["image_only"]), (0, 0))
+
+    def test_detection_elsewhere_is_image_only_and_the_way_is_map_only(self):
+        report = run_analyse([scene_annotation(box=(10, 900, 60, 950))])
+        self.assertEqual(report["paired"], 0)
+        self.assertEqual(report["map_only"], 1)
+        self.assertEqual(report["image_only"], 1)
+
+    def test_unknown_state_neither_pairs_nor_accuses_the_map(self):
+        report = run_analyse([scene_annotation(state="unknown")])
+        self.assertEqual(report["image_only"], 0)
+        self.assertEqual(report["map_only"], 1)
+
+    def test_head_on_projection_is_counted_as_front(self):
+        report = run_analyse([scene_annotation()])
+        stats = report["ways"]["3281"]
+        self.assertEqual(stats["projected_front_frames"], 1)
+        self.assertEqual(stats["projected_oblique_frames"], 0)
+        self.assertEqual(stats["front_observation_rate"], 1.0)
+
+    def test_signal_facing_away_is_not_counted_at_all(self):
+        report = run_analyse([scene_annotation()], lights=scene_light((0.0, 1.0)))
+        self.assertEqual(report["ways"], {})
+        self.assertEqual(report["paired"], 0)
+
+    def test_per_frame_findings_are_recorded_for_the_map_view(self):
+        report = run_analyse([scene_annotation(box=(10, 900, 60, 950))])
+        frames = report["frames_with_findings"]
+        self.assertEqual(len(frames), 1)
+        self.assertEqual(frames[0]["channel"], "CAM_A")
+        self.assertEqual(frames[0]["t"], 1000)
+        self.assertEqual([m["way"] for m in frames[0]["map_only"]], ["3281"])
+        self.assertEqual(frames[0]["image_only"][0]["state"], "red-circle")
+
+    def test_a_clean_frame_produces_no_per_frame_entry(self):
+        report = run_analyse([scene_annotation()])
+        self.assertEqual(report["frames_with_findings"], [])
+
+    def test_image_only_records_its_nearest_projection(self):
+        report = run_analyse([scene_annotation(box=(10, 900, 60, 950))])
+        entry = report["frames_with_findings"][0]["image_only"][0]
+        self.assertEqual(entry["nearest_way"], "3281")
+        self.assertGreater(entry["nearest_px"], 0)
 
 
 if __name__ == "__main__":

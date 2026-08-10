@@ -9,6 +9,7 @@ import numpy as np
 
 from tlr_autolabel.review.re_map_view import (
     build_steps,
+    load_consistency,
     ego_poses_by_sample_data,
     clip_polyline,
     light_positions,
@@ -255,6 +256,51 @@ class EgoPosesFromDatasetTest(unittest.TestCase):
         self.assertEqual(
             sorted(ego_poses_by_sample_data(self._dataset(frames))), ["sdA", "sdB"]
         )
+
+
+class LoadConsistencyTest(unittest.TestCase):
+    REPORT = {
+        "frames": 10, "paired": 5, "map_only": 1, "image_only": 2,
+        "ways": {"3281": {"front_observation_rate": 0.0}},
+        "findings": [{"kind": "unmapped_signal", "detail": "..."}],
+        "frames_with_findings": [{
+            "channel": "CAM_A", "t": 1234,
+            "map_only": [{"way": "3281"}],
+            "image_only": [{"state": "red-ped"}],
+        }],
+    }
+
+    def _write(self, payload):
+        import json, tempfile
+        self._tmp = tempfile.TemporaryDirectory()
+        path = Path(self._tmp.name) / "report.json"
+        path.write_text(json.dumps(payload))
+        return path
+
+    def test_absent_path_means_the_view_behaves_as_before(self):
+        self.assertIsNone(load_consistency(None, required=False))
+
+    def test_optional_missing_file_is_tolerated(self):
+        self.assertIsNone(load_consistency(Path("/nope/report.json"), required=False))
+
+    def test_named_but_missing_file_is_an_error(self):
+        # A typo must not look like "no problems found".
+        with self.assertRaises(SystemExit):
+            load_consistency(Path("/nope/report.json"), required=True)
+
+    def test_frames_are_indexed_by_channel_and_timestamp(self):
+        loaded = load_consistency(self._write(self.REPORT), required=True)
+        self.assertEqual(list(loaded["by_frame"]), ["CAM_A|1234"])
+        self.assertEqual(loaded["by_frame"]["CAM_A|1234"]["map_only"], [{"way": "3281"}])
+
+    def test_findings_and_totals_are_carried_through(self):
+        loaded = load_consistency(self._write(self.REPORT), required=True)
+        self.assertEqual(loaded["findings"][0]["kind"], "unmapped_signal")
+        self.assertEqual(loaded["totals"]["image_only"], 2)
+
+    def test_report_without_per_frame_entries_still_loads(self):
+        loaded = load_consistency(self._write({"frames": 1, "findings": []}), required=True)
+        self.assertEqual(loaded["by_frame"], {})
 
 
 class ViewBoundsTest(unittest.TestCase):

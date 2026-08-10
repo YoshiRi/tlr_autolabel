@@ -32,6 +32,7 @@ from pathlib import Path
 
 from tlr_autolabel.map.lanelet2 import load_lanelet2_traffic_lights
 from tlr_autolabel.map.projection import project_traffic_lights
+from tlr_autolabel.review.re_apply import load_reviewed_sidecar
 from tlr_autolabel.review.re_review_timeline import (
     DEFAULT_CROP_CHANNELS,
     parse_float,
@@ -151,6 +152,9 @@ def analyse(
         "frames": 0, "states": Counter(), "kinds": Counter(),
         "nearest_way": Counter(), "offsets": [],
     })
+    # Per-frame outcome, keyed the way the map view addresses a frame, so the
+    # aggregate can be pinned back to the frames that produced it.
+    frames_report: list[dict] = []
     n_frames = 0
     n_pairs = 0
     n_map_only = 0
@@ -206,6 +210,7 @@ def analyse(
                 entry["paired_front"] += 1
             entry["offsets"].append(distance)
 
+        image_only_report = []
         for detection in image_only:
             near = nearest_projection(detection, projected)
             key = frame.channel
@@ -216,6 +221,27 @@ def analyse(
             if near is not None:
                 bucket["nearest_way"][near[0]["way_id"]] += 1
                 bucket["offsets"].append(near[1])
+            image_only_report.append({
+                "token": detection.get("token", ""),
+                "box2d": [round(float(v), 1) for v in detection.get("box2d", [])],
+                "state": attrs(detection).get("state", ""),
+                "kind": attrs(detection).get("signal_kind", "") or "unknown",
+                "nearest_way": None if near is None else near[0]["way_id"],
+                "nearest_px": None if near is None else round(near[1], 1),
+            })
+
+        if map_only or image_only_report:
+            frames_report.append({
+                "channel": frame.channel,
+                "t": frame.timestamp,
+                "sample_data_token": token,
+                "map_only": [
+                    {"way": c["way_id"], "facing": c["facing"],
+                     "distance_m": round(c["distance_m"], 1)}
+                    for c in map_only
+                ],
+                "image_only": image_only_report,
+            })
 
     ways = {}
     for way_id, entry in sorted(per_way.items()):
@@ -237,8 +263,10 @@ def analyse(
             "median_offset_px": round(median(offsets), 1) if offsets else None,
         }
 
+    frames_report.sort(key=lambda f: (f["channel"], f["t"] or 0))
     return {
         "frames": n_frames,
+        "frames_with_findings": frames_report,
         "paired": n_pairs,
         "map_only": n_map_only,
         "image_only": n_image_only,
@@ -390,6 +418,13 @@ def parse_args(argv=None) -> argparse.Namespace:
         "--sidecar", default=Path("annotation/traffic_signal_2d_ann.json"), type=Path
     )
     parser.add_argument("--map", default=Path("map/lanelet2_map.osm"), type=Path)
+    parser.add_argument(
+        "--review",
+        default=None,
+        type=Path,
+        help="apply this traffic_signal_re_review/v1 file before checking, to "
+             "measure the reviewed output rather than the raw detections",
+    )
     parser.add_argument("--crop-channels", default=DEFAULT_CROP_CHANNELS)
     parser.add_argument(
         "--max-distance", default=120.0, type=float,
@@ -447,7 +482,13 @@ def run(args: argparse.Namespace) -> None:
         if not path.exists():
             raise SystemExit(f"{what} not found: {path}")
 
-    annotations = json.loads(sidecar_path.read_text()).get("annotations", [])
+    review_path = None
+    if args.review is not None:
+        review_path = args.review if args.review.is_absolute() else root / args.review
+    sidecar, _ = load_reviewed_sidecar(
+        sidecar_path, root, review_path, required=args.review is not None
+    )
+    annotations = sidecar.get("annotations", [])
     if not annotations:
         raise SystemExit(f"no annotations in {sidecar_path}")
     channels = resolve_crop_channels(
