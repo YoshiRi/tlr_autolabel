@@ -502,6 +502,9 @@ A map that is not MGRS-projected simply loses the links; nothing else changes.
 cb7fd5c0 resolves to 36.4029N, 136.4117E -- Komatsu, Ishikawa -- which matches
 the `Komatsu` in the source bag name and the road signs visible in the frames.
 
+Once a disagreement is visible here, `re_map_consistency.py` measures it --
+see [map_consistency.md](map_consistency.md).
+
 ### What it showed on cb7fd5c0
 
 Only 4 ways were ever matched. The same way is often matched *and* rejected,
