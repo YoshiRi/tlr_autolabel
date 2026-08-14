@@ -8,6 +8,7 @@ from pathlib import Path
 
 from tlr_autolabel.review.re_apply import load_reviewed_sidecar
 from tlr_autolabel.review.re_review_all import (
+    build_consistency,
     parse_args,
     timeline_argv,
     view_argv,
@@ -63,6 +64,24 @@ class TimelineArgvTest(unittest.TestCase):
             "--show-empty-crop-segments",
             timeline_argv(parse_args(["--show-empty-crop-segments"])),
         )
+
+
+class ConsistencyWiringTest(unittest.TestCase):
+    def test_disabled_by_flag(self):
+        args = parse_args(["--dataset-root", "/ds", "--no-consistency"])
+        self.assertIsNone(build_consistency(args, None))
+
+    def test_skipped_when_the_dataset_has_no_map(self):
+        # A dataset without lanelet2 still deserves the other views.
+        args = parse_args(["--dataset-root", "/ds", "--map", "map/absent.osm"])
+        self.assertIsNone(build_consistency(args, None))
+
+    def test_enabled_by_default(self):
+        self.assertFalse(parse_args([]).no_consistency)
+
+    def test_report_path_is_configurable(self):
+        args = parse_args(["--consistency-out", "build/other.json"])
+        self.assertEqual(str(args.consistency_out), "build/other.json")
 
 
 def make_sidecar(state="unknown"):

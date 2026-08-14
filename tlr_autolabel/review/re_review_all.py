@@ -24,7 +24,12 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from tlr_autolabel.review import re_frame_view, re_map_view, re_review_timeline
+from tlr_autolabel.review import (
+    re_frame_view,
+    re_map_consistency,
+    re_map_view,
+    re_review_timeline,
+)
 from tlr_autolabel.review.re_review_timeline import (
     DEFAULT_CROP_CHANNELS,
     draft_path_for,
@@ -33,6 +38,7 @@ from tlr_autolabel.review.re_review_timeline import (
 TIMELINE_HTML = Path("build/tl_match/re_review_timeline.html")
 FRAME_HTML = Path("build/tl_match/re_frame_view.html")
 MAP_HTML = Path("build/tl_match/re_map_view.html")
+CONSISTENCY_JSON = Path("build/tl_match/map_consistency.json")
 
 
 def view_argv(args: argparse.Namespace, review: Path | None) -> list[str]:
@@ -47,22 +53,46 @@ def view_argv(args: argparse.Namespace, review: Path | None) -> list[str]:
     return argv
 
 
+def build_consistency(args: argparse.Namespace, review: Path | None) -> Path | None:
+    """Run the map/image check and return the report path, or None.
+
+    Skipped rather than fatal when the dataset has no lanelet2 map: the views
+    are still worth having, and a missing map is not the reviewer's problem.
+    """
+    if args.no_consistency:
+        return None
+    root = args.dataset_root.resolve()
+    map_path = args.map if args.map.is_absolute() else root / args.map
+    if not map_path.exists():
+        print(f"skipping consistency check: no map at {map_path}", flush=True)
+        return None
+    argv = view_argv(args, review) + [
+        "--map", str(args.map),
+        "--output", str(args.consistency_out),
+    ]
+    re_map_consistency.run(re_map_consistency.parse_args(argv))
+    return args.consistency_out
+
+
 def build_views(args: argparse.Namespace, review: Path | None) -> None:
     """(Re)generate the two read-only views, optionally against a review."""
+    consistency = build_consistency(args, review)
     re_frame_view.run(re_frame_view.parse_args(
         view_argv(args, review)
         + ["--output", str(args.frame_view),
            "--map-view", str(args.map_view),
            "--timeline", str(args.timeline)]
     ))
-    re_map_view.run(re_map_view.parse_args(
-        view_argv(args, review)
-        + ["--output", str(args.map_view),
-           "--map", str(args.map),
-           "--context-radius", str(args.context_radius),
-           "--frame-view", str(args.frame_view),
-           "--timeline", str(args.timeline)]
-    ))
+    map_argv = view_argv(args, review) + [
+        "--output", str(args.map_view),
+        "--map", str(args.map),
+        "--context-radius", str(args.context_radius),
+        "--frame-view", str(args.frame_view),
+        "--timeline", str(args.timeline),
+    ]
+    if consistency is not None:
+        map_argv += ["--consistency", str(consistency)]
+    re_map_view.run(re_map_view.parse_args(map_argv))
 
 
 def timeline_argv(args: argparse.Namespace) -> list[str]:
@@ -120,6 +150,12 @@ def parse_args(argv=None) -> argparse.Namespace:
         action="store_true",
         help="generate the three pages and exit instead of serving them",
     )
+    parser.add_argument(
+        "--no-consistency",
+        action="store_true",
+        help="skip the map/image consistency check and its overlay",
+    )
+    parser.add_argument("--consistency-out", default=CONSISTENCY_JSON, type=Path)
     parser.add_argument("--timeline", default=TIMELINE_HTML, type=Path)
     parser.add_argument("--frame-view", default=FRAME_HTML, type=Path)
     parser.add_argument("--map-view", default=MAP_HTML, type=Path)

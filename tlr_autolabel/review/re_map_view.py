@@ -192,6 +192,39 @@ def attach_latlon(steps: list[dict], lights: dict, grid: str | None) -> str | No
     return grid
 
 
+def load_consistency(path: Path | None, required: bool) -> dict | None:
+    """The consistency report, indexed for per-frame lookup in the page.
+
+    Optional: without it the map view behaves exactly as before. Named
+    explicitly but missing is an error, so a typo cannot look like "no
+    problems found".
+    """
+    if path is None:
+        return None
+    if not path.exists():
+        if required:
+            raise SystemExit(f"consistency report not found: {path}")
+        return None
+    report = json.loads(path.read_text())
+    by_frame = {}
+    for entry in report.get("frames_with_findings", []):
+        by_frame[f"{entry['channel']}|{entry['t']}"] = {
+            "map_only": entry.get("map_only", []),
+            "image_only": entry.get("image_only", []),
+        }
+    return {
+        "by_frame": by_frame,
+        "ways": report.get("ways", {}),
+        "findings": report.get("findings", []),
+        "totals": {
+            "frames": report.get("frames"),
+            "paired": report.get("paired"),
+            "map_only": report.get("map_only"),
+            "image_only": report.get("image_only"),
+        },
+    }
+
+
 def view_bounds(steps: list[dict], lights: dict, margin: float) -> tuple:
     """Axis-aligned box covering the ego path and every drawn signal."""
     xs = [s["x"] for s in steps] + [l["x"] for l in lights.values()]
@@ -283,6 +316,13 @@ def parse_args(argv=None) -> argparse.Namespace:
         help="map projector info, used to turn map coordinates into lat/lon",
     )
     parser.add_argument(
+        "--consistency",
+        default=None,
+        type=Path,
+        help="map_consistency.json from re_map_consistency.py; its findings are "
+             "overlaid on the affected frames and signals",
+    )
+    parser.add_argument(
         "--context-radius",
         default=120.0,
         type=float,
@@ -362,6 +402,13 @@ def run(args: argparse.Namespace) -> None:
         else root / args.map_projector_info
     )
     grid = attach_latlon(steps, lights, load_mgrs_grid(projector_path))
+    consistency_path = None
+    if args.consistency is not None:
+        consistency_path = (
+            args.consistency if args.consistency.is_absolute()
+            else root / args.consistency
+        )
+    consistency = load_consistency(consistency_path, args.consistency is not None)
     stats = summarize(steps, lights)
 
     subtitle = (
@@ -377,6 +424,10 @@ def run(args: argparse.Namespace) -> None:
             f"{apply_summary['applied_roi_annotations']} ROI applied)"
             if apply_summary else ""
         )
+        + (
+            f" &middot; <b>{len(consistency['findings'])} consistency finding(s)</b>"
+            if consistency else ""
+        )
     )
 
     links = companion_links(
@@ -386,6 +437,7 @@ def run(args: argparse.Namespace) -> None:
         PAGE_TEMPLATE.replace("__SUBTITLE__", subtitle)
         .replace("__LINKS__", json.dumps(links, ensure_ascii=False))
         .replace("__GEO__", json.dumps({"grid": grid}, ensure_ascii=False))
+        .replace("__CONSISTENCY__", json.dumps(consistency, ensure_ascii=False))
         .replace("__STEPS__", json.dumps(steps, ensure_ascii=False))
         .replace("__LIGHTS__", json.dumps(list(lights.values()), ensure_ascii=False))
         .replace("__LANELETS__", json.dumps(lanelets, ensure_ascii=False))
@@ -433,6 +485,14 @@ PAGE_TEMPLATE = """<!doctype html>
   .geolinks a { color:#1a7f4b; text-decoration:none; font-size:11px;
     border:1px solid var(--line); border-radius:3px; padding:1px 5px; }
   .geolinks a:hover { border-color:#1a7f4b; }
+  .finding { border:1px solid var(--bad); border-left-width:4px; border-radius:4px;
+    background:#fdf6f5; padding:6px 8px; margin-bottom:6px; font-size:12px; }
+  .finding b { display:block; font-size:11px; text-transform:uppercase;
+    letter-spacing:.04em; color:var(--bad); }
+  .finding .m { color:var(--muted); font-size:11px; }
+  .findingOk { color:#1a7f4b; font-size:12px; margin-bottom:8px; }
+  #findingsBox { border-bottom:1px solid var(--line); padding-bottom:10px;
+    margin-bottom:12px; }
   main { display:grid; grid-template-columns:minmax(0,1fr) 380px; }
   #mapWrap { padding:14px 16px; }
   canvas { display:block; width:100%; background:#fff; border:1px solid var(--line);
@@ -464,6 +524,8 @@ PAGE_TEMPLATE = """<!doctype html>
     <button id="nextBtn" type="button">&rarr;</button>
     <button id="playBtn" type="button">Play</button>
     <span class="grow"><input id="slider" type="range" min="0" value="0"></span>
+    <label class="chk" id="findingsToggle" style="display:none"><input type="checkbox"
+      id="showFindings" checked> consistency findings</label>
     <label class="chk"><input type="checkbox" id="showRoad" checked> road</label>
     <label class="chk"><input type="checkbox" id="showRays" checked> rays to observed</label>
     <label class="chk"><input type="checkbox" id="showFacing" checked> facing</label>
@@ -494,6 +556,11 @@ PAGE_TEMPLATE = """<!doctype html>
     </div>
   </div>
   <aside>
+    <div id="findingsBox" style="display:none">
+      <h2>Consistency</h2>
+      <div id="findingsSummary"></div>
+      <div id="frameFindings"></div>
+    </div>
     <h2>At this frame</h2>
     <div id="obsList"></div>
   </aside>
@@ -506,6 +573,7 @@ const CONTEXT_WAYS = __WAYS__;
 const STATS = __STATS__;
 const LINKS = __LINKS__;
 const GEO = __GEO__;
+const CONSISTENCY = __CONSISTENCY__;
 const LANE_STYLE = {
   road:           {fill: '#eceff2', stroke: '#dadfe4'},
   road_shoulder:  {fill: '#f2f4f6', stroke: '#e3e7ea'},
@@ -600,6 +668,7 @@ function draw() {
   if (document.getElementById('showRays').checked) {
     drawRays(ctx, step, stateByWay, candSeen);
   }
+  if (findingsOn()) drawFindings(ctx, step);
   drawEgo(ctx, step);
   drawScaleBar(ctx);
 }
@@ -736,6 +805,32 @@ function drawRays(ctx, step, stateByWay, candSeen) {
   }
 }
 
+// A map_only way gets a ring: the map says a readable signal is here and the
+// camera saw nothing. image_only boxes have no map position by definition, so
+// they are reported as a count next to the ego rather than drawn as geometry.
+function drawFindings(ctx, step) {
+  const found = frameFindings(step);
+  if (!found) return;
+  for (const entry of found.map_only) {
+    const light = lightByWay.get(entry.way);
+    if (!light) continue;
+    const [px, py] = toCanvas(light.x, light.y);
+    ctx.strokeStyle = '#9f2d20';
+    ctx.lineWidth = 2;
+    ctx.setLineDash([4, 3]);
+    ctx.beginPath();
+    ctx.arc(px, py, 14, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
+  if (found.image_only.length) {
+    const [ex, ey] = toCanvas(step.x, step.y);
+    ctx.fillStyle = '#9f2d20';
+    ctx.font = '600 12px system-ui, sans-serif';
+    ctx.fillText(`${found.image_only.length} unmapped in image`, ex + 12, ey + 20);
+  }
+}
+
 function drawEgo(ctx, step) {
   const [px, py] = toCanvas(step.x, step.y);
   const len = 18;
@@ -774,6 +869,15 @@ function drawScaleBar(ctx) {
 
 // Companion views follow the frame on screen, so switching view keeps the
 // moment rather than restarting at frame 0.
+function frameFindings(step) {
+  if (!CONSISTENCY || !step) return null;
+  return CONSISTENCY.by_frame[`${step.channel}|${step.t}`] || null;
+}
+
+function findingsOn() {
+  return Boolean(CONSISTENCY) && document.getElementById('showFindings').checked;
+}
+
 function mapsUrl(lat, lon, zoom) {
   return `https://www.google.com/maps/@${lat},${lon},${zoom || 19}z`;
 }
@@ -806,6 +910,31 @@ function syncViewLinks() {
   }
 }
 
+function renderFindings(step) {
+  if (!CONSISTENCY) return;
+  const host = document.getElementById('frameFindings');
+  const found = frameFindings(step);
+  if (!found) {
+    host.innerHTML = '<div class="findingOk">no disagreement on this frame</div>';
+    return;
+  }
+  let html = '';
+  for (const entry of found.map_only) {
+    html += `<div class="finding"><b>map only</b>way ${escapeHtml(entry.way)} `
+      + `projects ${escapeHtml(entry.facing)} at ${entry.distance_m} m, `
+      + `nothing detected there<span class="m"></span></div>`;
+  }
+  for (const entry of found.image_only) {
+    const near = entry.nearest_way
+      ? `nearest map signal: way ${escapeHtml(entry.nearest_way)} at ${entry.nearest_px} px`
+      : 'no map signal projects in this frame at all';
+    html += `<div class="finding"><b>image only</b>`
+      + `${escapeHtml(entry.state)} (${escapeHtml(entry.kind)}) has no map signal`
+      + `<span class="m">${near}</span></div>`;
+  }
+  host.innerHTML = html;
+}
+
 function renderPanel() {
   syncViewLinks();
   const host = document.getElementById('obsList');
@@ -823,6 +952,7 @@ function renderPanel() {
           + (GEO.grid ? ` (${escapeHtml(GEO.grid)})` : '')
         : '');
 
+  renderFindings(step);
   host.innerHTML = step.obs.map(o => {
     const light = lightByWay.get(o.way || o.cand);
     const re = light && light.re.length ? light.re.join(', ') : '-';
@@ -951,6 +1081,25 @@ function applyHash() {
 }
 
 window.addEventListener('hashchange', () => { setPlaying(false); applyHash(); });
+
+if (CONSISTENCY) {
+  document.getElementById('findingsToggle').style.display = '';
+  document.getElementById('findingsBox').style.display = '';
+  document.getElementById('showFindings').addEventListener('change', () => {
+    draw();
+    renderPanel();
+  });
+  const totals = CONSISTENCY.totals;
+  const summary = CONSISTENCY.findings.length
+    ? CONSISTENCY.findings.map(f =>
+        `<div class="finding"><b>${escapeHtml(f.kind)}</b>`
+        + `${escapeHtml(f.detail)}</div>`).join('')
+    : '<div class="findingOk">no findings across the run</div>';
+  document.getElementById('findingsSummary').innerHTML =
+    `<div class="sub" style="margin-bottom:8px">paired ${totals.paired} &middot; `
+    + `map only ${totals.map_only} &middot; image only ${totals.image_only}</div>`
+    + summary;
+}
 
 rebuildVisible();
 if (!applyHash()) show(0);
