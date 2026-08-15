@@ -3,7 +3,7 @@
 作業計画の単一管理ファイル。タスクの追加・完了・方針変更はここを更新する。
 設計の契約は README.md 冒頭(処理層 / Tier A-C + B-review)。矛盾時は README を正とする。
 
-最終更新: 2026-08-02
+最終更新: 2026-08-07
 
 ## ✅ 完了(日付順)
 
@@ -28,6 +28,7 @@
 | 07-28 | **B/B' IF文書の再明確化**: B/B'の正しいt4dataset IFは `object_ann.json` 系 + `traffic_light.json` のみと再確認。`traffic_signal_2d/v2` / `traffic_signal_re/v1` / `traffic_signal_re_review/v1` / `traffic_light_map_association.json` はこのRepo内のA/A'側またはtemporary/deprecated sidecarであり、B/B'判定・納品IFには含めない。 |
 | 07-31 | **TIER B IF再確認**: `annotation/traffic_light.json` は `{token, instance_token, primitive_id}`。B/B'差分はこのファイルの有無だけで、RE/group relationはmapから解決する。 |
 | 07-31 | **フィールド名を t4devkit実スキーマへ統一**: `traffic_light.json` の第3フィールドを repo-local な `traffic_light_linestring_id` から t4devkit準拠の `primitive_id` へ全ファイル(コード/README/docs)でリネーム。schemaは引き続き `{token, instance_token, primitive_id}`(値は変わらずlanelet2 way id) |
+| 08-07 | **推論比較ハーネス**(PLAN 12): L1 の入力抽象化(images/video/rosbag/T4)+ 設定のデータ化 + Pipeline 化 + classifier registry を土台に、`run_compare.py`(構成×N を同一フレームで実行)と `compare_naive.py`(GTも地図も無しで一致/不一致/安定性/timing/並置グリッド)を追加。Tier A は追加キーのみで v1 維持(before/after 14 payload 差分ゼロ)。`docs/inference_comparison.md` |
 
 ## 📋 残タスク(実行順)
 
@@ -377,7 +378,61 @@ autolabelingで再現可能に選べるようにする。出力IFは既存
       (`.engine` も family 宣言)。`model_type` 未指定時は推測 + `UserWarning`。README 更新、
       プリセット検証テスト追加、全体 77/77、Docker 実機で「preset=warnなし / bare --detector=warnあり」確認
 - [ ] 段階C: 他オープンモデル1本を通して seam が薄いことを実証 → README にレシピ
-- [ ] classifier 側の seam は 2つ目の classifier が出た時に(現状 LampRecognizer 単一なので後回し)
+- [x] **classifier 側の seam**(2026-08-07、比較ハーネスの前提として先行実施):
+      `ClassifierModel` protocol + `register_classifier` + `classifier_type` /
+      `--classifier-type`(既定 `lamp_recognizer`)。`--classifier none` で検出器のみ実行。
+      正準 lamp list が families 間の共通契約(全体1ラベル型は1要素で返す規約)
+
+### 12. [done 2026-08-07] 推論比較ハーネス(任意入力 × 任意モデル組合せ)
+設計・契約: `docs/inference_comparison.md`。「任意の画像/動画/rosbag を食わせて
+各組合せの naive 出力を比較する」を、新フォーマットを増やさずに実現する
+(各構成の出力は**素の Tier A ラベルディレクトリ**なので既存の下流ツールがそのまま使える)。
+- [x] **入力の抽象化** `tlr_autolabel/frames/`: images / video / rosbag2 / T4 dataset。
+      frame identity(`frame_id` = 比較の join キー、`frame_index`、`channel`、
+      `sample_data_token`)は source の責務に。images は従来規則をビット同一で維持。
+      bag reader は node ではない(rosbag2_py/rclpy は遅延 import、`ros2_pipeline/` 非依存、
+      cv_bridge を使わず numpy/cv2 デコード)
+- [x] **設定のデータ化** `inference/config.py`: `InferenceConfig` +
+      `defaults <- preset <- 明示 override`。argparse Namespace 依存(`ap._actions`)を解消し、
+      1プロセスで N 構成を保持できるように。フィールド名は旧 args と同名なので下流関数は無改変
+- [x] **Pipeline オブジェクト** `inference/pipeline.py`: `run(frame) -> Tier A payload`。
+      `meta` と payload 組み立てを main() から剥がす。Tier A は追加キーのみ
+      (`source` / `timestamp_us` / `timing_ms` / `meta.detector_type`・`classifier_type`・
+      model sha256)で `v1` 維持。**6 CLI 呼び出し・14 payload の before/after diff が
+      meta の family 2キー以外完全一致**を確認
+- [x] **frame cache** `frames/cache.py`: video/bag は先に1回だけ展開(PNG既定)。
+      全構成が同一ピクセルを見ることの保証 + 下流レビューツールが実ファイルを開ける
+- [x] **matrix runner (L1)** `scripts/run_compare.py` + `configs/compare/*.yaml`:
+      構成は逐次実行(`.engine` は trt_run 常駐なので同時常駐でGPUメモリを食う)、
+      `TrtServer.close()` 追加。出力は `labels/<combo>/*.json` + `run_manifest.json`
+- [x] **GT-free/map-free 比較器 (L6)** `scripts/compare_naive.py`:
+      構成別サマリ(件数/score・箱サイズ分位/state分布/timing)、時間安定性
+      (frame間IoUリンクの維持率・state flip率)、reference とのペア一致
+      (box agreement / matched IoU / state一致 / 不一致箱のscore中央値 / 上位混同)、
+      任意の consensus(相関誤差の caveat をレポート内に明記、detector共有構成も列挙)、
+      最も不一致なフレームの並置グリッド(+mp4)
+- [x] テスト: fake backend で matrix parse → 構成別 Tier A → manifest → 指標 → md →
+      グリッド → video展開経路まで通す(全体 143/143)
+- 用途の限定: **差分の所在の可視化**であって順位付けではない(PLAN 2.8/2.9 の
+  「S960>L1920 は広角固有」の教訓)。順位は地図参照 `compare_runs.py` か GT 評価で
+- [x] **実モデルでの疎通確認**(2026-08-07): Autoware model-store 実モデル
+      (`autoware-mlmodels-960-onnx`、CPU onnxruntime)で T4 dataset の
+      CAM_TRAFFIC_LIGHT_NEAR 4frame × 2閾値を実走。Tier A(sample_data_token 付き)、
+      timing 0.7-0.8s/frame、一致レポート、crop付きグリッドまで確認
+- [x] **`.engine` 経路の実走確認**(2026-08-07、RTX 3060 Laptop 6GB + TensorRT 10.8):
+      detector engine + classifier engine 両方。①ONNXとデコード一致(箱・state同一、
+      score差~1e-3、box/state agreement 1.0)②detector 35ms/frame(engine)vs 628ms(CPU onnx)
+      ③**engine構成3本を逐次実行して6GBでOOMなし・orphan trt_run 0**(`Pipeline.close()` →
+      `TrtServer.close()` が効いている)④engine+tiles: 271→979ms、検出+4。その+4を
+      レポートが正しく「consensus precision 0.824 / 不一致箱のscore中央値 0.527(=境界検出)」
+      と位置づけた
+- [ ] **実 bag での試走**は未実施(bag が手元にない。デコード/命名規則はユニットテストのみ)
+- [x] 実走で判明した2点を修正: ①strideした run の安定性指標は `n/a` 表示
+      (frame_index の中央ギャップを併記。0.0 だと「フリッカー」と誤読される)
+      ②グリッドの箱/ラベルは panel リサイズ**後**に描画(2880px→800px で潰れていた)。
+      信号は画面比が極小なので `--grid-crop`(全構成の検出の和領域)と `--grid-width` を追加
+- [ ] 余地: 距離ビン別の比較は地図が必要なので `compare_runs.py` 側に接続する
+      (naive 比較は地図なし前提のまま)
 - [ ] `cli/match.py`(814行)分割・データIFのコード内スキーマ化は**触る時ついで**で対応(単独着手しない)
 
 ### 6. [backlog] 高速化の続き(現状 0.78s/frame で実用十分。必要になったら)

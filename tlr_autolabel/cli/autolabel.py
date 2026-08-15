@@ -1,21 +1,18 @@
 #!/usr/bin/env python3
 """Combined TLR autolabeling: detector -> per-ROI YOLOX classifier (LampRecognizer).
 
-full image ─> detector (find traffic_light boxes, NMS)
-           ─> for each box: crop ─> lamp recognizer (color + shape + arrow)
-           ─> annotated image (--viz) + JSON labels (--out-dir)
+frames  ─> detector (find traffic_light boxes, NMS)
+        ─> for each box: crop ─> lamp recognizer (color + shape + arrow)
+        ─> annotated image (--viz) + JSON labels (--out-dir)
 
-Two detector families are supported; the type is auto-detected from the ONNX
-output count:
-  1 output  -> YOLOX traffic_light detector (tensorrt_yolox style: BGR, no /255,
-               grid/stride decode, num_class=1)
-  3 outputs -> CoMLOps-Large-Detection-Model (darknet YOLO style: RGB, /255,
-               5 anchors x (4 box + obj + 10 cls) per scale, strides 8/16/32,
-               bw = pw*(2*sig(tw))^2; anchors from configs/model_params/comlops_large_detector_ml.param.yaml,
-               empirically fitted -- see that yaml's header).
-               Kept classes default to TRAFFIC_LIGHT only (--det-classes).
+Detector and classifier families are plug-ins (`detector_type` /
+`classifier_type`, see docs/model_interface.md); the shipped families are the
+YOLOX traffic-light detector, the CoMLOps darknet detector, and the
+LampRecognizer classifier.
 
-Reuses the faithful classifier decode from tlr_autolabel.inference.lamp_recognizer_onnx.
+Frames come from a frame source (docs/inference_comparison.md), not necessarily
+a directory: images, a video, a rosbag, or a T4 dataset all feed the same
+pipeline and produce the same Tier A `tlr_autolabel/v1` output.
 
 Usage:
   # 1) verification pass on a few images, write annotated pngs to eyeball
@@ -27,66 +24,41 @@ Usage:
   # detector selection: named preset (configs/detectors/*.yaml) or explicit path
   python3 scripts/tlr_autolabel.py <dir> --preset yolox-1920-int8
   python3 scripts/tlr_autolabel.py <dir> --detector .../CoMLOps-Large-Detection-Model-v1.0.1.onnx
+
+  # other inputs (the image argument is then unused/optional)
+  python3 scripts/tlr_autolabel.py --video drive.mp4 --frame-stride 5 --preset yolox-960-int8 --out-dir ./labels
+  python3 scripts/tlr_autolabel.py --bag ./rosbag2_2026 --preset yolox-960-int8 --out-dir ./labels
+
+  # compare several detector/classifier combinations instead of one:
+  python3 scripts/run_compare.py --matrix configs/compare/<name>.yaml --out ./build/compare
 """
 import argparse
-import glob
 import json
 import os
-import uuid
-from datetime import datetime, timezone
 from pathlib import Path
 
 import cv2
 
-from tlr_autolabel.inference.detector import (
-    Detector,
-    clipped_detection_box,
-    detect_full_and_tiles,
+from tlr_autolabel.frames import build_frame_source
+from tlr_autolabel.inference.config import (
+    DEFAULT_CLASSIFIER, DEFAULT_CLASSIFIER_PARAM, DEFAULT_COMLOPS_PARAM,
+    autoware_mlmodels_root, config_from_args, expand_path, list_presets,
+    load_preset, model_root,
 )
+from tlr_autolabel.inference.detector import Detector
 from tlr_autolabel.inference.lamp_recognizer import LampClassifier, normalize_lamps, signal_state
+from tlr_autolabel.inference.models import list_classifiers, list_detectors
+from tlr_autolabel.inference.pipeline import (
+    Pipeline, new_run_id, process_image, process_image_with_candidates,
+)
 
 REPO_ROOT = str(Path(__file__).resolve().parents[2])
 
-
-def process_image_with_candidates(img, detector, classifier, args):
-    ih, iw = img.shape[:2]
-    score_thr = (args.det_low_score_thr
-                 if args.det_low_score_thr is not None
-                 else args.det_score_thr)
-    boxes = detect_full_and_tiles(detector, img, args, score_thr=score_thr)
-
-    results = []
-    raw_detections = []
-    for b in boxes:
-        box_xyxy = clipped_detection_box(b, iw, ih, args.min_box)
-        if box_xyxy is None:
-            continue
-        is_high = b["prob"] >= args.det_score_thr
-        lamps = []
-        if is_high or args.classify_low_detections:
-            lamps = normalize_lamps(classifier.classify(img, box_xyxy))
-        candidate = {
-            "detector_score": round(b["prob"], 4),
-            "box_xyxy": list(box_xyxy),
-            "lamps": lamps,
-            "state": signal_state(lamps),
-            "detection_level": "high" if is_high else "low",
-        }
-        raw_detections.append(dict(candidate))
-        if is_high:
-            if args.drop_unknown and not lamps:
-                continue
-            results.append({
-                "detector_score": candidate["detector_score"],
-                "box_xyxy": candidate["box_xyxy"],
-                "lamps": candidate["lamps"],
-                "state": candidate["state"],
-            })
-    return results, raw_detections
-
-
-def process_image(img, detector, classifier, args):
-    return process_image_with_candidates(img, detector, classifier, args)[0]
+# re-exported for callers that used to import them from here
+__all__ = ["main", "draw", "process_image", "process_image_with_candidates",
+           "expand_path", "model_root", "autoware_mlmodels_root", "list_presets",
+           "load_preset", "Detector", "LampClassifier", "normalize_lamps",
+           "signal_state", "list_detectors", "list_classifiers"]
 
 
 def draw(img, results):
@@ -104,72 +76,46 @@ def draw(img, results):
     return vis
 
 
-PRESET_DIR = os.path.join(REPO_ROOT, "configs", "detectors")
-
-# Search order for the ML model root, matching Autoware launch's `data_path`
-# default at the end so presets resolve the same on a deployed machine.
-MODEL_ROOT_CANDIDATES = ["~/autoware_data", "/opt/autoware/mlmodels"]
-
-
-def autoware_mlmodels_root():
-    """Resolve the standard Autoware model-store mount without changing the
-    older TLR_MODEL_ROOT search order used by existing presets."""
-    env = os.environ.get("AUTOWARE_MLMODELS") or os.environ.get("AUTOWARE_MLMODELS_ROOT")
-    return os.path.expanduser(env) if env else "/opt/autoware/mlmodels"
-
-
-def model_root():
-    """Resolve the model root: $TLR_MODEL_ROOT if set, else the first existing
-    candidate. Presets reference models as ${TLR_MODEL_ROOT}/..., so this keeps
-    them free of machine-specific absolute paths."""
-    env = os.environ.get("TLR_MODEL_ROOT")
-    if env:
-        return os.path.expanduser(env)
-    for cand in MODEL_ROOT_CANDIDATES:
-        p = os.path.expanduser(cand)
-        if os.path.isdir(p):
-            return p
-    return os.path.expanduser(MODEL_ROOT_CANDIDATES[0])
+def add_frame_source_args(ap):
+    """Input selection, shared with scripts/run_compare.py."""
+    ap.add_argument("--video", default=None, help="read frames from a video file")
+    ap.add_argument("--bag", default=None,
+                    help="read camera images from a rosbag2 (mcap/sqlite3); needs a sourced ROS 2")
+    ap.add_argument("--bag-topics", default=None,
+                    help="comma-separated image topics (default: every image topic in the bag)")
+    ap.add_argument("--channels", default=None,
+                    help="with --t4-dataset: comma-separated camera channels (default: all)")
+    ap.add_argument("--frame-stride", type=int, default=1,
+                    help="keep every Nth frame (default: 1); applies to every "
+                         "input kind")
+    ap.add_argument("--frame-start", type=int, default=0,
+                    help="first video frame number to read")
+    ap.add_argument("--max-frames", type=int, default=None,
+                    help="stop after N frames (per topic for a bag, per camera "
+                         "for a T4 dataset) — handy for a quick trial run")
 
 
-def expand_path(val):
-    """Expand ~, $VARS, ${TLR_MODEL_ROOT}, and ${AUTOWARE_MLMODELS} in a
-    preset/CLI path string."""
-    return os.path.expanduser(os.path.expandvars(
-        val.replace("${TLR_MODEL_ROOT}", model_root())
-           .replace("$TLR_MODEL_ROOT", model_root())
-           .replace("${AUTOWARE_MLMODELS}", autoware_mlmodels_root())
-           .replace("$AUTOWARE_MLMODELS", autoware_mlmodels_root())))
-
-
-def list_presets():
-    return sorted(os.path.splitext(f)[0] for f in os.listdir(PRESET_DIR)
-                  if f.endswith(".yaml")) if os.path.isdir(PRESET_DIR) else []
-
-
-def apply_preset(ap, args):
-    """Overlay preset values onto args, but only where the user did not pass an
-    explicit CLI flag (explicit CLI always beats the preset)."""
-    import yaml
-    path = os.path.join(PRESET_DIR, args.preset + ".yaml")
-    if not os.path.exists(path):
-        raise SystemExit(f"unknown preset {args.preset!r}; available: {', '.join(list_presets())}")
-    with open(path) as f:
-        preset = yaml.safe_load(f)
-    defaults = {a.dest: a.default for a in ap._actions}
-    for key, val in preset.items():
-        dest = key.replace("-", "_")
-        if dest not in defaults:
-            raise SystemExit(f"preset {args.preset}: unknown key {key!r}")
-        if isinstance(val, str):
-            val = expand_path(val)
-        if getattr(args, dest) == defaults[dest]:
-            setattr(args, dest, val)
+def frame_source_spec(args, *, prefer_t4_source=False):
+    """Map the input flags onto a `build_frame_source` spec."""
+    subsample = {"stride": args.frame_stride, "max_frames": args.max_frames}
+    if args.video:
+        return {"kind": "video", "uri": args.video, "start": args.frame_start,
+                **subsample}
+    if args.bag:
+        return {"kind": "rosbag", "uri": args.bag, "topics": args.bag_topics,
+                **subsample}
+    if prefer_t4_source and args.t4_dataset and not getattr(args, "image", None):
+        return {"kind": "t4", "root": args.t4_dataset, "channels": args.channels,
+                **subsample}
+    if not getattr(args, "image", None):
+        raise SystemExit("no input: pass an image/directory, --video, --bag, or --t4-dataset")
+    return {"kind": "images", "path": args.image, "image_root": args.image_root,
+            "t4_dataset": args.t4_dataset, **subsample}
 
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("image", help="image file or directory")
+    ap.add_argument("image", nargs="?", default=None, help="image file or directory")
     ap.add_argument("--preset", default=None,
                     help="named detector preset from configs/detectors/ "
                          f"(available: {', '.join(list_presets())})")
@@ -178,9 +124,12 @@ def main():
     ap.add_argument("--detector-type", default=None,
                     help="detector family (e.g. yolox, comlops); overrides the preset "
                          "and the .onnx output-count auto-detect")
-    ap.add_argument("--classifier", default=os.path.join(REPO_ROOT, "models", "traffic_light_lamp_recognizer_comlops.onnx"))
-    ap.add_argument("--classifier-param", default=os.path.join(REPO_ROOT, "configs", "model_params", "lamp_recognizer_ml.param.yaml"))
-    ap.add_argument("--comlops-param", default=os.path.join(REPO_ROOT, "configs", "model_params", "comlops_large_detector_ml.param.yaml"),
+    ap.add_argument("--classifier", default=DEFAULT_CLASSIFIER,
+                    help="classifier model path, or 'none' for a detector-only run")
+    ap.add_argument("--classifier-type", default=None,
+                    help="classifier family (default: lamp_recognizer)")
+    ap.add_argument("--classifier-param", default=DEFAULT_CLASSIFIER_PARAM)
+    ap.add_argument("--comlops-param", default=DEFAULT_COMLOPS_PARAM,
                     help="decode params (anchors etc.) for the CoMLOps darknet detector")
     ap.add_argument("--det-classes", default="TRAFFIC_LIGHT",
                     help="comma-separated class names kept from the CoMLOps detector")
@@ -226,6 +175,12 @@ def main():
     ap.add_argument("--t4-dataset", default=None,
                     help="T4 dataset root: fills sample_data_token/channel from "
                          "annotation/sample_data.json and uses it as image root")
+    add_frame_source_args(ap)
+    ap.add_argument("--timing", action="store_true",
+                    help="record per-frame timing_ms (detector/classifier/total) in Tier A")
+    ap.add_argument("--model-digest", action="store_true",
+                    help="record model sha256 in meta (two runs are only comparable "
+                         "if these match)")
     ap.add_argument("--run-id", default=None,
                     help="identifier stored in meta.run_id (default: timestamp + random)")
     ap.add_argument("--skip-existing", action="store_true",
@@ -233,142 +188,59 @@ def main():
                          "(resume an interrupted batch)")
     args = ap.parse_args()
 
-    if args.preset:
-        apply_preset(ap, args)
-    if args.no_tiles:
-        args.tiles = False
-    if not args.detector:
-        raise SystemExit("choose a detector: --preset <name> "
-                         f"(available: {', '.join(list_presets())}) or --detector <model path>")
-    if args.det_low_score_thr is not None and args.det_low_score_thr > args.det_score_thr:
-        raise SystemExit("--det-low-score-thr must be <= --det-score-thr")
-    # model paths given directly may also use ~ / $VARS / ${TLR_MODEL_ROOT}
-    args.detector = expand_path(args.detector)
-    args.classifier = expand_path(args.classifier)
-    args.classifier_param = expand_path(args.classifier_param)
-    args.comlops_param = expand_path(args.comlops_param)
-    if not os.path.exists(args.detector):
-        raise SystemExit(
-            f"detector model not found: {args.detector}"
-            + (f" (from preset {args.preset})" if args.preset else "")
-            + f"\nmodel root = {model_root()} "
-            "(set $TLR_MODEL_ROOT to point at your ML model directory).")
-    if not os.path.exists(args.classifier):
-        raise SystemExit(
-            f"classifier model not found: {args.classifier}"
-            + (f" (from preset {args.preset})" if args.preset else "")
-            + f"\nmodel root = {model_root()} "
-            "(set $TLR_MODEL_ROOT to point at your ML model directory).")
-    if not os.path.exists(args.classifier_param):
-        raise SystemExit(
-            f"classifier param not found: {args.classifier_param}"
-            + (f" (from preset {args.preset})" if args.preset else ""))
+    cfg = config_from_args(ap, args, extra_overrides={
+        **({"tiles": False} if args.no_tiles else {}),
+        "record_timing": bool(args.timing),
+        "record_model_digest": bool(args.model_digest),
+    })
+    source = build_frame_source(frame_source_spec(args, prefer_t4_source=True))
 
-    detector = Detector(args.detector, args.comlops_param, model_type=args.detector_type)
-    if detector.kind == "comlops":
-        detector.set_keep_classes([s.strip() for s in args.det_classes.split(",") if s.strip()])
-
-    classifier = LampClassifier(args.classifier, args.classifier_param, args)
-
-    backend = ("tensorrt-engine" if detector.sess is None
-               else str(detector.sess.get_providers()))
-    print(f"detector={os.path.basename(args.detector)} [{detector.kind}] "
-          f"in={detector.w}x{detector.h} backend={backend}")
-    print(f"classifier={os.path.basename(args.classifier)} "
-          f"in={classifier.width}x{classifier.height} backend={classifier.backend}")
-
-    if os.path.isdir(args.image):
-        paths = sorted(sum([glob.glob(os.path.join(args.image, e))
-                            for e in ("*.png", "*.jpg", "*.jpeg", "*.bmp")], []))
-    else:
-        paths = [args.image]
+    pipeline = build_pipeline(cfg, run_id=args.run_id or new_run_id())
+    print(pipeline.describe())
 
     if args.out_dir:
         os.makedirs(args.out_dir, exist_ok=True)
 
-    # image paths in the JSON are relative to image_root (portable across
-    # machines/containers); the realpath is kept alongside as a convenience.
-    if args.t4_dataset and not args.image_root:
-        image_root = os.path.realpath(args.t4_dataset)
-    else:
-        image_root = os.path.realpath(
-            args.image_root or (args.image if os.path.isdir(args.image)
-                                else os.path.dirname(args.image) or "."))
-    t4map = {}
-    if args.t4_dataset:
-        with open(os.path.join(args.t4_dataset, "annotation", "sample_data.json")) as f:
-            for sd in json.load(f):
-                key = os.path.realpath(os.path.join(args.t4_dataset, sd["filename"]))
-                t4map[key] = sd
+    def already_done(frame_id):
+        return bool(args.skip_existing and args.out_dir and
+                    os.path.exists(os.path.join(args.out_dir, frame_id + ".json")))
 
-    # provenance block written into every per-image JSON (schema tlr_autolabel/v1)
-    run_id = args.run_id or (datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-                             + "-" + uuid.uuid4().hex[:8])
-    meta = {
-        "run_id": run_id,
-        "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-        "preset": args.preset,
-        "detector": os.path.basename(args.detector),
-        "detector_backend": backend,
-        "model_root": model_root(),
-        "classifier": os.path.basename(args.classifier),
-        "classifier_backend": classifier.backend,
-        "tiles": bool(args.tiles),
-        "det_score_thr": args.det_score_thr,
-        "det_low_score_thr": args.det_low_score_thr,
-        "classify_low_detections": bool(args.classify_low_detections),
-        "det_nms_thr": args.det_nms_thr,
-        "cls_score_thr": args.cls_score_thr,
-        "cls_nms_thr": args.cls_nms_thr,
-        "min_box": args.min_box,
-        "crop_pad": args.crop_pad,
-    }
-
-    for seq, p in enumerate(paths):
-        name = os.path.splitext(os.path.basename(p))[0]
-        if args.skip_existing and args.out_dir and \
-                os.path.exists(os.path.join(args.out_dir, name + ".json")):
-            continue
-        img = cv2.imread(p)
-        if img is None:
-            print(f"[skip] {p}")
-            continue
-        results, raw_detections = process_image_with_candidates(img, detector, classifier, args)
-        name = os.path.splitext(os.path.basename(p))[0]
-        print(f"\n=== {os.path.basename(p)} ({img.shape[1]}x{img.shape[0]}): "
-              f"{len(results)} signal(s) ===")
-        for r in results:
-            lamp_str = ", ".join("{}({:.2f})".format(l["label"], l["confidence"]) for l in r["lamps"])
-            print(f"  [{r['state']}] det={r['detector_score']:.2f} box={r['box_xyxy']} lamps=[{lamp_str}]")
+    for frame in source.iter_frames(skip=already_done):
+        payload = pipeline.run(frame)
+        w, h = frame.size
+        print(f"\n=== {os.path.basename(frame.rel_path)} ({w}x{h}): "
+              f"{len(payload['signals'])} signal(s) ===")
+        for r in payload["signals"]:
+            lamp_str = ", ".join("{}({:.2f})".format(l["label"], l["confidence"])
+                                 for l in r["lamps"])
+            print(f"  [{r['state']}] det={r['detector_score']:.2f} "
+                  f"box={r['box_xyxy']} lamps=[{lamp_str}]")
         if args.out_dir:
-            rp = os.path.realpath(p)
-            rel = os.path.relpath(rp, image_root)
-            sd = t4map.get(rp)
-            # channel: from any CAM_*/etc. path component; frame_index: numeric
-            # stem when the file is numbered (T4 style), else sequence order
-            channel = next((c for c in rel.split(os.sep)[:-1]
-                            if c.upper() == c and not c.startswith(".")), None)
-            frame_index = int(name) if name.isdigit() else seq
-            for i, r in enumerate(results):
-                results[i] = {"signal_id": f"{name}-{i:02d}", **r}
-            if args.det_low_score_thr is not None:
-                for i, r in enumerate(raw_detections):
-                    raw_detections[i] = {"raw_detection_id": f"{name}-raw-{i:02d}", **r}
-            payload = {"schema_version": "tlr_autolabel/v1",
-                       "image": rel,
-                       "image_realpath": rp,
-                       "sample_data_token": sd["token"] if sd else None,
-                       "channel": channel,
-                       "frame_index": frame_index,
-                       "width": img.shape[1], "height": img.shape[0],
-                       "meta": meta,
-                       "signals": results}
-            if args.det_low_score_thr is not None:
-                payload["raw_detections"] = raw_detections
-            with open(os.path.join(args.out_dir, name + ".json"), "w") as f:
+            out_path = os.path.join(args.out_dir, frame.frame_id + ".json")
+            os.makedirs(os.path.dirname(out_path) or args.out_dir, exist_ok=True)
+            with open(out_path, "w") as f:
                 json.dump(payload, f, indent=2, ensure_ascii=False)
             if args.viz:
-                cv2.imwrite(os.path.join(args.out_dir, name + ".viz.png"), draw(img, results))
+                cv2.imwrite(out_path[: -len(".json")] + ".viz.png",
+                            draw(frame.image, payload["signals"]))
+    pipeline.close()
+
+
+def build_pipeline(cfg, run_id=""):
+    """Build the models through this module's names, so the CLI smoke test can
+    keep monkeypatching `Detector` / `LampClassifier` here."""
+    from tlr_autolabel.inference.config import validate_config
+
+    validate_config(cfg)
+    detector = Detector(cfg.detector, cfg.comlops_param, model_type=cfg.detector_type)
+    if detector.kind == "comlops":
+        detector.set_keep_classes(
+            [s.strip() for s in cfg.det_classes.split(",") if s.strip()])
+    classifier = None
+    if cfg.classifier_enabled:
+        classifier = LampClassifier(cfg.classifier, cfg.classifier_param, cfg,
+                                    model_type=cfg.classifier_type)
+    return Pipeline(cfg=cfg, detector=detector, classifier=classifier, run_id=run_id)
 
 
 if __name__ == "__main__":

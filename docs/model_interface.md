@@ -1,18 +1,30 @@
 # Model interface design (detector / classifier plug-in)
 
-Status: **phase A implemented** (2026-08-02); phases B/C pending. Prerequisite
-for onboarding other open models (PLAN.md item 11). No behavior change — this is
-a seam, not a rewrite.
+Status: **phases A and B implemented** (2026-08-02) plus the **classifier seam**
+(2026-08-07); phase C (onboarding an external model) pending. Prerequisite for
+onboarding other open models (PLAN.md item 11). No behavior change — this is a
+seam, not a rewrite.
 
 Phase A shipped: `tlr_autolabel/inference/models/` (registry + `DetectorModel`
 protocol + `yolox`/`comlops` model modules), with `Detector` routed through the
 registry and the output-count guess kept as the fallback. The `.decode` /
 `.preprocess` bodies call the existing functions verbatim, so detector output is
 bit-identical (unit-pinned in `tests/test_detector_models.py`; verified on the
-real GPU onnx and `.engine` paths). Phases B (explicit `detector_type` in
-presets + `--detector-type`) and C (onboard one external model) remain. The
-classifier seam is deferred until a second classifier family appears (only
-LampRecognizer exists today).
+real GPU onnx and `.engine` paths). Phase B shipped too: `detector_type` is
+explicit in every shipped preset, `--detector-type` overrides it, and the
+output-count guess is a warned fallback. Phase C (onboard one external model)
+remains.
+
+The **classifier seam shipped on 2026-08-07**, earlier than the "wait for a
+second family" plan below: comparing *combinations*
+(`docs/inference_comparison.md`) needs classifier families selectable by name,
+exactly like detectors. `ClassifierModel` + `register_classifier` +
+`classifier_type` / `--classifier-type` (default `lamp_recognizer`) are in, with
+the LampRecognizer preprocess/decode wrapped verbatim in
+`inference/models/lamp_recognizer.py`, and `--classifier none` runs the detector
+alone. The canonical lamp list stays the cross-family contract: a family that
+predicts one label for the whole signal returns a single-element list, so `state`
+remains comparable.
 
 ## Problem
 
@@ -230,6 +242,8 @@ No wrapper edits. The classifier side is symmetric.
 - Where the comlops param file resolves from once `params` is a generic bag —
   keep the current `--comlops-param` flag, pass it through as
   `params={"param_path": ...}`.
-- Whether `classifier_type` is worth adding in phase B given there is only one
-  classifier family today (probably defer until a second one appears, but the
-  registry costs nothing to add).
+- ~~Whether `classifier_type` is worth adding in phase B given there is only one
+  classifier family today~~ **resolved 2026-08-07: added.** The trigger was not a
+  second family but the comparison harness, which selects combinations by name.
+  The registry indeed cost nothing; `params` for the classifier carries
+  `classifier_param_path` (same shape as the comlops one above).

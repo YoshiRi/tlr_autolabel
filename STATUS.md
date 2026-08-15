@@ -4,7 +4,7 @@
 (毎コミットではない)。役割分担: **能力・ゴール・成熟度はここだけ**、タスク
 (動詞)は PLAN、契約・IF・層は README、横断事実はプロジェクトメモリ。
 
-最終レビュー: 2026-07-29
+最終レビュー: 2026-08-07
 
 ## North Star
 
@@ -52,6 +52,10 @@
 | L1 low raw candidates | G2 | experimental | △ `--det-low-score-thr`で`raw_detections`を出力。lowは既定未分類、`--classify-low-detections`で明示分類 |
 | L1 タイル推論(遠方小信号) | G2 | works-here | ○ +20%検出/デグレ0(c1af6a38) |
 | L1 新モデル試走(素の --detector) | G3 | reproducible | ○ flexibility contract。多クラス/動的shape は明示エラー |
+| L1 入力の抽象化(images/video/rosbag2/T4 dataset) | G3/G2 | works-here | ○ `frames/` frame source。video/bag は先に1回展開して全構成が同一ピクセルを見る。実bagでの試走は未(△) |
+| L1 モデルIF plug-in(detector + classifier registry) | G3 | reproducible | ○ `detector_type`/`classifier_type`。新familyは1モジュール+registry登録。`--classifier none`で検出器のみ |
+| 構成×N の一括推論(`scripts/run_compare.py`) | G1/G3 | works-here | ○ matrix YAML。出力は素のTier Aディレクトリなので下流はそのまま使える。実GPU/実モデルでの試走は未(△) |
+| L6 比較(GTも地図も無し: 一致/不一致箇所/安定性/timing/並置グリッド) | G1 | works-here | ○ `scripts/compare_naive.py`。**差分の所在の可視化であって順位付けではない**(順位は地図参照 compare_runs.py かGT評価) |
 | L3 地図マッチ(lanelet2 投影+Hungarian) | G2 | works-here | ○ 84.7%マッチ(6カメラ) |
 | L3 時系列tracking(High/Low association + TTL) | G2 | experimental | △ 明示`--temporal-tracking`時のみON。low候補は既存track更新のみ、短欠落は`propagated`。Tier B converter defaultでは`tracked`/`propagated`を除外し、review aid扱い。現在投影bbox優先、無い場合は前回投影/前回bboxでfallback。同じ(channel,map way)はTTL後再観測でもtrack_id再利用。`TemporalAssociator.update -> TrackingResult`に集約。設定は`configs/tracking/bytetrack-lite.yaml`。合成T4 integration + cb7fd5c0 full smoke pass |
 | L3 融合+自動補正(フリップ修復/方向スナップ/未マッチ分類) | G2 | works-here | ○ |
@@ -76,7 +80,9 @@
 2. **人間が確認したGTがまだ無い** — CVAT往復とRE timeline review基盤は通ったが、
    実際に人が `accepted/fixed/rejected` を付けたラベルはまだ無い(G2, PLAN 2.5/2.7)。
    これが 1 を塞いでいる。
-3. **run間比較の実証がない** — fp32 vs int8、モデル間比較を GT 上で出していない(G1)。
+3. **run間比較の「どちらが良いか」がまだGTに載っていない** — 構成間の差分自体は
+   `compare_naive.py`(GTフリー)/`compare_runs.py`(地図参照)で出せるようになったが、
+   優劣を GT 上で示していない(G1)。
 4. **複数データセットのスケール未実証** — 1データセットで1回動いただけ(G2/G5)。
 5. **モデルの内容同一性が未管理** — 評価結果とモデルの対応が名前依存(G5, PLAN 9)。
 
