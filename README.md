@@ -130,6 +130,13 @@ fields are the source of truth. Every produced file records provenance
 (`meta.run_id`, models, thresholds) and a `schema_version`; schema changes bump
 the version and keep a read fallback for one version.
 
+`meta` also records the **sha256 of the detector and classifier actually loaded**
+(`meta.detector_sha256` / `meta.classifier_sha256`), resolved to a human name via
+the known-good registry `configs/models.yaml` (`meta.detector_model` /
+`meta.classifier_model`). A loaded `.onnx` whose hash is not in the registry
+warns — internal-use drift detection (no network fetch). Engines are
+machine/TensorRT-version specific and intentionally not tracked.
+
 ## Detector model matrix (multiple ONNX patterns)
 
 | model family | format to use | why |

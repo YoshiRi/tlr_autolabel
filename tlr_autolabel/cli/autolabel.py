@@ -33,11 +33,13 @@ import glob
 import json
 import os
 import uuid
+import warnings
 from datetime import datetime, timezone
 from pathlib import Path
 
 import cv2
 
+from tlr_autolabel.core.models import load_model_manifest, model_provenance
 from tlr_autolabel.inference.detector import (
     Detector,
     clipped_detection_box,
@@ -270,6 +272,20 @@ def main():
 
     classifier = LampClassifier(args.classifier, args.classifier_param, args)
 
+    # model provenance: record the exact bytes used, resolve to a known-good name,
+    # and flag an unlisted .onnx (silent drift detection). Engines are machine-
+    # specific and intentionally unlisted, so they are not flagged.
+    manifest = load_model_manifest()
+    det_prov = model_provenance(args.detector, manifest)
+    cls_prov = model_provenance(args.classifier, manifest)
+    for role, path, prov in (("detector", args.detector, det_prov),
+                             ("classifier", args.classifier, cls_prov)):
+        if prov["sha256"] and not prov["known"] and path.endswith(".onnx"):
+            warnings.warn(
+                f"{role} {os.path.basename(path)} (sha256 {prov['sha256'][:12]}) "
+                "is not in the configs/models.yaml known-good registry; add it "
+                "if this model is intended.", stacklevel=2)
+
     backend = ("tensorrt-engine" if detector.sess is None
                else str(detector.sess.get_providers()))
     print(f"detector={os.path.basename(args.detector)} [{detector.kind}] "
@@ -310,9 +326,13 @@ def main():
         "preset": args.preset,
         "detector": os.path.basename(args.detector),
         "detector_backend": backend,
+        "detector_sha256": det_prov["sha256"],
+        "detector_model": det_prov["model"],
         "model_root": model_root(),
         "classifier": os.path.basename(args.classifier),
         "classifier_backend": classifier.backend,
+        "classifier_sha256": cls_prov["sha256"],
+        "classifier_model": cls_prov["model"],
         "tiles": bool(args.tiles),
         "det_score_thr": args.det_score_thr,
         "det_low_score_thr": args.det_low_score_thr,

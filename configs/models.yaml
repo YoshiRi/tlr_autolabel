@@ -1,0 +1,28 @@
+# Known-good model artifacts (internal registry).
+#
+# Keyed by sha256 so a run's recorded hash resolves to a human name and
+# unexpected bytes are flagged (see tlr_autolabel/core/models.py). Add an entry
+# when you introduce a new model you intend to use; an L1 run with an unlisted
+# .onnx warns. Engines (.engine) are machine/TensorRT-version specific and are
+# intentionally NOT tracked here.
+#
+# NOTE (2026-08-02): the repo-vendored classifier and the Autoware store copy
+# have the same name but different bytes -- both are listed below so either is
+# recognized, but they are a divergence to collapse once model management lands.
+schema_version: tlr_models/v1
+
+models:
+  - name: traffic_light_lamp_recognizer_comlops
+    role: classifier
+    source: repo-vendored (models/)
+    sha256: 300af04a5893961195a9b7ffd9d80364280f328a6dc549f9b1e05d428d96d2e5
+
+  - name: traffic_light_lamp_recognizer_comlops
+    role: classifier
+    source: autoware model-store traffic_light_classifier/awf/4.1
+    sha256: ed6c574b760258f4f864fecbd8f3c914d65ce49a1015e29196fdd7dcc5beec9e
+
+  - name: yolox_s_car_ped_tl_detector_960_960
+    role: detector
+    source: autoware model-store traffic_light_detector/common/0.1.2
+    sha256: 0b8478553f2f0374a1236e65f669f11335b1fea7756ca7bcdfcf9646657ed594
