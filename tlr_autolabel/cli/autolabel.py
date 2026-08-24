@@ -35,10 +35,12 @@ Usage:
 import argparse
 import json
 import os
+import warnings
 from pathlib import Path
 
 import cv2
 
+from tlr_autolabel.core.models import load_model_manifest, model_provenance
 from tlr_autolabel.frames import build_frame_source
 from tlr_autolabel.inference.config import (
     DEFAULT_CLASSIFIER, DEFAULT_CLASSIFIER_PARAM, DEFAULT_COMLOPS_PARAM,
@@ -178,9 +180,11 @@ def main():
     add_frame_source_args(ap)
     ap.add_argument("--timing", action="store_true",
                     help="record per-frame timing_ms (detector/classifier/total) in Tier A")
-    ap.add_argument("--model-digest", action="store_true",
-                    help="record model sha256 in meta (two runs are only comparable "
-                         "if these match)")
+    ap.add_argument("--model-digest", action=argparse.BooleanOptionalAction, default=True,
+                    help="record model sha256 + known-good registry name in meta "
+                         "(two runs are only comparable if these match). On by "
+                         "default so every Tier A run stays traceable to exact "
+                         "model bytes; --no-model-digest opts out.")
     ap.add_argument("--run-id", default=None,
                     help="identifier stored in meta.run_id (default: timestamp + random)")
     ap.add_argument("--skip-existing", action="store_true",
@@ -197,6 +201,7 @@ def main():
 
     pipeline = build_pipeline(cfg, run_id=args.run_id or new_run_id())
     print(pipeline.describe())
+    warn_unknown_models(cfg)
 
     if args.out_dir:
         os.makedirs(args.out_dir, exist_ok=True)
@@ -224,6 +229,25 @@ def main():
                 cv2.imwrite(out_path[: -len(".json")] + ".viz.png",
                             draw(frame.image, payload["signals"]))
     pipeline.close()
+
+
+def warn_unknown_models(cfg):
+    """Flag a loaded .onnx whose bytes are not in configs/models.yaml -- silent
+    model drift detection (a vendored copy diverging from the published one is
+    otherwise invisible). Engines are machine/TensorRT-specific and are
+    intentionally unregistered, so they are never flagged."""
+    if not cfg.record_model_digest:
+        return
+    manifest = load_model_manifest()
+    for role, path in (("detector", cfg.detector), ("classifier", cfg.classifier)):
+        if not path or not str(path).endswith(".onnx"):
+            continue
+        prov = model_provenance(path, manifest)
+        if prov["sha256"] and not prov["known"]:
+            warnings.warn(
+                f"{role} {os.path.basename(path)} (sha256 {prov['sha256'][:12]}) "
+                "is not in the configs/models.yaml known-good registry; add it "
+                "if this model is intended.", stacklevel=2)
 
 
 def build_pipeline(cfg, run_id=""):

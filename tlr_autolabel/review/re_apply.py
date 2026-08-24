@@ -2,9 +2,14 @@
 """Apply traffic_signal_re_review/v1 decisions to a Tier B sidecar.
 
 This is the join point between CVAT-style per-frame geometry fixes and the
-regulatory-element timeline review. It changes only review-owned attributes:
-`state`, `signal_kind`, and `review_status`. Geometry, map ids, visibility,
-raw_state, detector scores, and provenance stay as they are.
+regulatory-element timeline review. Per-group `decisions` change only
+review-owned attributes: `state`, `signal_kind`, and `review_status`. A
+group may also carry per-camera-channel `visibility_decisions` (visibility
+is inherently camera-view-dependent -- a passing vehicle occludes one
+camera's view of a signal without affecting another's -- so these are
+segmented and applied per channel, independently of the state decisions).
+Geometry, map ids, raw_state, detector scores, and provenance stay as they
+are either way.
 """
 
 from __future__ import annotations
@@ -18,8 +23,20 @@ from pathlib import Path
 from tlr_autolabel.core.state_tokens import CANON_RE, LEGACY_RE, elements_key, parse_state
 from tlr_autolabel.core.io import load_json
 
+class ReviewValidationError(ValueError):
+    """A review document is structurally valid JSON but semantically wrong.
+
+    A plain exception rather than SystemExit so callers that are not a CLI --
+    the save endpoint, the post-commit view refresh -- can catch it. The CLI
+    entry points convert it back into SystemExit for a clean exit.
+    """
+
+
 VALID_REVIEW_STATUS = {"unchecked", "accepted", "rejected", "fixed"}
 APPLY_STATUSES = {"accepted", "rejected", "fixed"}
+VALID_VISIBILITY = {"full", "partial", "occluded", "unknown"}
+APPLY_VISIBILITY_STATUSES = {"accepted", "fixed"}
+APPLY_ROI_STATUSES = {"fixed"}
 
 
 def invalid_state_tokens(state: str) -> list[str]:
@@ -130,8 +147,149 @@ def normalize_decisions(review: dict, sample_ts: dict[str, int]) -> list[dict]:
             )
     if errors:
         detail = "\n  ".join(errors)
-        raise SystemExit(f"review validation failed, {len(errors)} problem(s):\n  {detail}")
+        raise ReviewValidationError(
+            f"review validation failed, {len(errors)} problem(s):\n  {detail}"
+        )
     return decisions
+
+
+def normalize_visibility_decisions(review: dict, sample_ts: dict[str, int]) -> list[dict]:
+    decisions = []
+    errors = []
+    for group_index, group in enumerate(review.get("groups", [])):
+        member_ways = set(str(w) for w in group.get("member_ways", []))
+        member_ways |= parse_signal_group_id(group.get("signal_group_id", ""))
+        regulatory_ids = set(str(r) for r in group.get("regulatory_element_ids", []))
+        by_channel = group.get("visibility_decisions", {})
+        if not by_channel:
+            continue
+        if not member_ways and not regulatory_ids:
+            errors.append(f"group#{group_index}: no member_ways/regulatory ids for visibility_decisions")
+            continue
+        for channel, raw_decisions in by_channel.items():
+            for decision_index, raw in enumerate(raw_decisions):
+                status = raw.get("review_status", "unchecked")
+                if status not in VALID_REVIEW_STATUS:
+                    errors.append(
+                        f"group#{group_index} channel={channel!r} decision#{decision_index}: "
+                        f"invalid review_status {status!r}"
+                    )
+                    continue
+                visibility = raw.get("visibility")
+                if visibility not in VALID_VISIBILITY:
+                    errors.append(
+                        f"group#{group_index} channel={channel!r} decision#{decision_index}: "
+                        f"invalid visibility {visibility!r} (must be one of {sorted(VALID_VISIBILITY)})"
+                    )
+                    continue
+
+                start_token = raw.get("start_sample_token")
+                end_token = raw.get("end_sample_token") or start_token
+                start_ts = raw.get("start_timestamp")
+                end_ts = raw.get("end_timestamp")
+                if start_ts is None and start_token:
+                    start_ts = sample_ts.get(start_token)
+                if end_ts is None and end_token:
+                    end_ts = sample_ts.get(end_token)
+                if start_ts is None or end_ts is None:
+                    errors.append(
+                        f"group#{group_index} channel={channel!r} decision#{decision_index}: "
+                        "missing start/end timestamp and sample token lookup failed"
+                    )
+                    continue
+                if int(start_ts) > int(end_ts):
+                    errors.append(
+                        f"group#{group_index} channel={channel!r} decision#{decision_index}: "
+                        f"start_timestamp > end_timestamp ({start_ts} > {end_ts})"
+                    )
+                    continue
+                decisions.append(
+                    {
+                        "group_index": group_index,
+                        "decision_index": decision_index,
+                        "signal_group_id": group.get("signal_group_id", ""),
+                        "member_ways": member_ways,
+                        "regulatory_element_ids": regulatory_ids,
+                        "channel": channel,
+                        "start_timestamp": int(start_ts),
+                        "end_timestamp": int(end_ts),
+                        "visibility": visibility,
+                        "review_status": status,
+                    }
+                )
+    if errors:
+        detail = "\n  ".join(errors)
+        raise ReviewValidationError(
+            f"review validation failed, {len(errors)} problem(s):\n  {detail}"
+        )
+    return decisions
+
+
+def normalize_box2d(value) -> list[float]:
+    if not isinstance(value, (list, tuple)) or len(value) != 4:
+        raise ValueError(f"box2d must be a 4-element [x0,y0,x1,y1] list, got {value!r}")
+    try:
+        x0, y0, x1, y1 = (float(v) for v in value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"box2d values must be numeric: {value!r}") from exc
+    if not (x1 > x0 and y1 > y0):
+        raise ValueError(f"box2d must satisfy x1>x0 and y1>y0, got {value!r}")
+    return [x0, y0, x1, y1]
+
+
+def normalize_roi_decisions(review: dict) -> list[dict]:
+    """Per-frame box2d corrections.
+
+    Unlike state/visibility, geometry does not propagate across frames, so
+    each entry targets one exact annotation by token rather than a time
+    interval + member_ways/regulatory_element_ids match.
+    """
+    decisions = []
+    errors = []
+    for group_index, group in enumerate(review.get("groups", [])):
+        raw_decisions = group.get("roi_decisions", [])
+        if not raw_decisions:
+            continue
+        for decision_index, raw in enumerate(raw_decisions):
+            status = raw.get("review_status", "unchecked")
+            if status not in VALID_REVIEW_STATUS:
+                errors.append(
+                    f"group#{group_index} roi_decision#{decision_index}: "
+                    f"invalid review_status {status!r}"
+                )
+                continue
+            token = raw.get("annotation_token")
+            if not token:
+                errors.append(
+                    f"group#{group_index} roi_decision#{decision_index}: missing annotation_token"
+                )
+                continue
+            try:
+                box2d = normalize_box2d(raw.get("box2d"))
+            except ValueError as exc:
+                errors.append(f"group#{group_index} roi_decision#{decision_index}: {exc}")
+                continue
+            decisions.append(
+                {
+                    "group_index": group_index,
+                    "decision_index": decision_index,
+                    "signal_group_id": group.get("signal_group_id", ""),
+                    "annotation_token": token,
+                    "channel": raw.get("channel", ""),
+                    "box2d": box2d,
+                    "review_status": status,
+                }
+            )
+    if errors:
+        detail = "\n  ".join(errors)
+        raise ReviewValidationError(
+            f"review validation failed, {len(errors)} problem(s):\n  {detail}"
+        )
+    return decisions
+
+
+def roi_decision_matches_annotation(decision: dict, ann: dict) -> bool:
+    return bool(ann.get("token")) and ann.get("token") == decision["annotation_token"]
 
 
 def decision_matches_annotation(decision: dict, ann: dict) -> bool:
@@ -150,29 +308,111 @@ def decision_matches_annotation(decision: dict, ann: dict) -> bool:
     return bool(regulatory_ids & decision["regulatory_element_ids"])
 
 
-def apply_review(sidecar: dict, decisions: list[dict]) -> tuple[dict, dict]:
+def visibility_decision_matches_annotation(decision: dict, ann: dict) -> bool:
+    if ann.get("channel") != decision["channel"]:
+        return False
+    return decision_matches_annotation(decision, ann)
+
+
+def load_reviewed_sidecar(
+    sidecar_path: Path,
+    dataset_root: Path,
+    review_path: Path | None = None,
+    required: bool = False,
+) -> tuple[dict, dict | None]:
+    """Sidecar as the reviewed output would look.
+
+    The read-only views render the sidecar; pointing them at a review file
+    lets a reviewer confirm what their corrections actually produced instead
+    of re-reading the raw detector output. Returns (sidecar, apply summary);
+    the summary is None when no review was applied.
+    """
+    sidecar = json.loads(sidecar_path.read_text())
+    if review_path is None:
+        return sidecar, None
+    if not review_path.exists():
+        # Tolerated only for an optional path the caller nominated (a draft
+        # that may not exist yet); an explicit --review must fail loudly, or a
+        # typo silently shows unreviewed output as if it were reviewed.
+        if required:
+            raise SystemExit(f"review file not found: {review_path}")
+        return sidecar, None
+    review = json.loads(review_path.read_text())
+    sample_ts = timestamps_by_sample(sidecar, dataset_root)
+    try:
+        decisions = normalize_decisions(review, sample_ts)
+        visibility = normalize_visibility_decisions(review, sample_ts)
+        roi = normalize_roi_decisions(review)
+    except ReviewValidationError as exc:
+        raise SystemExit(f"{review_path}: {exc}") from exc
+    return apply_review(sidecar, decisions, visibility, roi)
+
+
+def validate_review_semantics(review: dict, sample_ts: dict[str, int]) -> str | None:
+    """Everything `validate_review_payload` cannot see: state vocabulary,
+    review_status values, box2d shape, group identity.
+
+    Returns an error message, or None when the document would apply cleanly.
+    """
+    try:
+        normalize_decisions(review, sample_ts)
+        normalize_visibility_decisions(review, sample_ts)
+        normalize_roi_decisions(review)
+    except ReviewValidationError as exc:
+        return str(exc)
+    return None
+
+
+def apply_review(
+    sidecar: dict,
+    decisions: list[dict],
+    visibility_decisions: list[dict] | None = None,
+    roi_decisions: list[dict] | None = None,
+) -> tuple[dict, dict]:
     out = json.loads(json.dumps(sidecar))
     applied = Counter()
     applied_by_status = Counter()
     overlaps = 0
 
     active_decisions = [d for d in decisions if d["review_status"] in APPLY_STATUSES]
+    active_visibility = [
+        d for d in (visibility_decisions or []) if d["review_status"] in APPLY_VISIBILITY_STATUSES
+    ]
+    active_roi = [d for d in (roi_decisions or []) if d["review_status"] in APPLY_ROI_STATUSES]
+    visibility_overlaps = 0
+    applied_visibility = 0
+    roi_overlaps = 0
+    applied_roi = 0
     for ann in out.get("annotations", []):
         hits = [d for d in active_decisions if decision_matches_annotation(d, ann)]
-        if not hits:
-            continue
-        if len(hits) > 1:
-            overlaps += 1
-        decision = hits[-1]
-        attrs = ann.setdefault("attributes", {})
-        if decision["review_status"] == "rejected":
-            attrs["review_status"] = "rejected"
-        else:
-            attrs["state"] = decision["state"]
-            attrs["signal_kind"] = derive_signal_kind(decision["state"])
-            attrs["review_status"] = decision["review_status"]
-        applied["annotations"] += 1
-        applied_by_status[decision["review_status"]] += 1
+        if hits:
+            if len(hits) > 1:
+                overlaps += 1
+            decision = hits[-1]
+            attrs = ann.setdefault("attributes", {})
+            if decision["review_status"] == "rejected":
+                attrs["review_status"] = "rejected"
+            else:
+                attrs["state"] = decision["state"]
+                attrs["signal_kind"] = derive_signal_kind(decision["state"])
+                attrs["review_status"] = decision["review_status"]
+            applied["annotations"] += 1
+            applied_by_status[decision["review_status"]] += 1
+
+        vis_hits = [d for d in active_visibility if visibility_decision_matches_annotation(d, ann)]
+        if vis_hits:
+            if len(vis_hits) > 1:
+                visibility_overlaps += 1
+            attrs = ann.setdefault("attributes", {})
+            attrs["visibility"] = vis_hits[-1]["visibility"]
+            applied_visibility += 1
+
+        roi_hits = [d for d in active_roi if roi_decision_matches_annotation(d, ann)]
+        if roi_hits:
+            if len(roi_hits) > 1:
+                roi_overlaps += 1
+            ann["box2d"] = roi_hits[-1]["box2d"]
+            applied_roi += 1
 
     out["schema_version"] = sidecar.get("schema_version", "traffic_signal_2d/v2")
     out["source"] = "re_timeline_review"
@@ -183,6 +423,12 @@ def apply_review(sidecar: dict, decisions: list[dict]) -> tuple[dict, dict]:
         "applied_annotations": applied["annotations"],
         "applied_by_status": dict(applied_by_status),
         "overlapping_annotation_matches": overlaps,
+        "applied_visibility_decisions": len(active_visibility),
+        "applied_visibility_annotations": applied_visibility,
+        "overlapping_visibility_matches": visibility_overlaps,
+        "applied_roi_decisions": len(active_roi),
+        "applied_roi_annotations": applied_roi,
+        "overlapping_roi_matches": roi_overlaps,
     }
     return out, out["re_review"]
 
@@ -225,8 +471,14 @@ def main() -> None:
             f"unsupported review schema_version: {review.get('schema_version')!r}"
         )
 
-    decisions = normalize_decisions(review, timestamps_by_sample(sidecar, root))
-    reviewed, summary = apply_review(sidecar, decisions)
+    sample_ts = timestamps_by_sample(sidecar, root)
+    try:
+        decisions = normalize_decisions(review, sample_ts)
+        visibility_decisions = normalize_visibility_decisions(review, sample_ts)
+        roi_decisions = normalize_roi_decisions(review)
+    except ReviewValidationError as exc:
+        raise SystemExit(f"{review_path}: {exc}") from exc
+    reviewed, summary = apply_review(sidecar, decisions, visibility_decisions, roi_decisions)
 
     print(
         "decisions="
@@ -234,6 +486,18 @@ def main() -> None:
         f"applied_annotations={summary['applied_annotations']} "
         f"by_status={summary['applied_by_status']} "
         f"overlaps={summary['overlapping_annotation_matches']}"
+    )
+    print(
+        "visibility_decisions="
+        f"{len(visibility_decisions)} apply_visibility_decisions={summary['applied_visibility_decisions']} "
+        f"applied_visibility_annotations={summary['applied_visibility_annotations']} "
+        f"overlaps={summary['overlapping_visibility_matches']}"
+    )
+    print(
+        "roi_decisions="
+        f"{len(roi_decisions)} apply_roi_decisions={summary['applied_roi_decisions']} "
+        f"applied_roi_annotations={summary['applied_roi_annotations']} "
+        f"overlaps={summary['overlapping_roi_matches']}"
     )
     if args.dry_run:
         return

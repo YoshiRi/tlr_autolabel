@@ -20,6 +20,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from time import perf_counter
 
+from tlr_autolabel.core.models import load_model_manifest
 from tlr_autolabel.inference.config import (
     InferenceConfig, file_digest, model_root, validate_config,
 )
@@ -191,8 +192,18 @@ class Pipeline:
         if cfg.classifier_enabled and getattr(self.classifier, "kind", None):
             meta["classifier_type"] = self.classifier.kind
         if cfg.record_model_digest:
-            meta["detector_sha256"] = file_digest(cfg.detector)
-            meta["classifier_sha256"] = file_digest(cfg.classifier)
+            # sha256 identifies the exact bytes; the known-good registry
+            # (configs/models.yaml) resolves that hash to a human name so a run
+            # is traceable to a specific published/vendored artifact. Hashing
+            # stays on the memoized file_digest -- the compare harness builds
+            # many pipelines and must not re-read every model per run.
+            manifest = load_model_manifest()
+            det_sha = file_digest(cfg.detector)
+            cls_sha = file_digest(cfg.classifier)
+            meta["detector_sha256"] = det_sha
+            meta["detector_model"] = (manifest.get(det_sha) or {}).get("name")
+            meta["classifier_sha256"] = cls_sha
+            meta["classifier_model"] = (manifest.get(cls_sha) or {}).get("name")
         self._meta = meta
         return meta
 
