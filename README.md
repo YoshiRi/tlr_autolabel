@@ -36,7 +36,9 @@ lanelet2 traffic-light IDs.
 | **L1 inference** | detect + classify signals over a frame source (image dir, video, rosbag, T4 dataset) | frames -> Tier A (`tlr_autolabel/v1` per-frame JSON) | `scripts/tlr_autolabel.py`, `scripts/run_compare.py` (N configurations at once) |
 | **L2 standardize (A→B)** | convert autolabel to standard t4dataset annotation: bbox + db_tlr `category` + `occlusion`/`truncation` attributes + 2D `instance`; map-signal identity belongs to t4devkit-defined `traffic_light.json` for B' | Tier A (or A') -> Tier B (`object_ann.json` + `category`/`attribute`/`instance`) [+ `traffic_light.json` for B'] | `scripts/to_object_ann.py` |
 | **L3 map enrichment (A→A')** | map association (lanelet2 way + RE group) + multi-camera/head fusion; an **internal** enrichment used for review/QA and to fill B' | Tier A + T4 map -> Tier A' (`traffic_signal_2d/v2` sidecar) + `traffic_signal_re/v1` | `scripts/match_traffic_lights.py`, `scripts/aggregate_regulatory_signals.py`, `scripts/render_re_timeline.py` |
-| **L4 review UI** | human correction that turns provisional A' into reviewed GT: per-frame box / state / visibility / map id (CVAT), and RE state-intervals (timeline); reviewed A' can then be standardized to B/B' | Tier A' -> reviewed A' -> Tier B/B' | CVAT pair (`scripts/export_cvat_signal_task.py`/`scripts/import_cvat_signal_annotations.py`, `docs/cvat_interop.md`) + RE review (`scripts/make_re_review_template.py`, `scripts/render_re_review_timeline.py`, `scripts/apply_re_review.py`, `docs/re_timeline_review.md`) |
+| **L4 review UI** | human correction that turns provisional A' into reviewed GT: per-frame box / state / visibility / map id (CVAT), and RE state-intervals + per-channel visibility + single-frame ROI (timeline); reviewed A' can then be standardized to B/B' | Tier A' -> reviewed A' -> Tier B/B' | CVAT pair (`scripts/export_cvat_signal_task.py`/`scripts/import_cvat_signal_annotations.py`, `docs/cvat_interop.md`) + RE review (`scripts/make_re_review_template.py`, `scripts/render_re_review_timeline.py`, `scripts/apply_re_review.py`, `docs/re_timeline_review.md`) |
+| **L4 review views** | read-only views that *explain* the annotations the timeline cannot reach (the timeline is organised by mapped signal group, which on cb7fd5c0 hides 45% of boxes): per-frame overlay + zoomed crops, and a top-down ego/map view with road geometry and Google Maps / Street View links. Cross-linked on the current frame; regenerated after every commit | Tier A' [+ review] -> static HTML | `python3 -m tlr_autolabel.review.re_review_all` (single launcher, `--serve`), or `re_review_timeline` / `re_frame_view` / `re_map_view` individually, `docs/re_timeline_review.md` |
+| **L4 map/image QA** | measure map vs image disagreement independently of the matcher's verdict (a rejected box still counts as an observation): `unmapped_signal` / `signal_never_observed` / `low_observation_rate` findings, aggregated per run and restricted to head-on frames | Tier A' + T4 map -> `map_consistency.json` (+ map-view overlay) | `python3 -m tlr_autolabel.review.re_map_consistency` (`--fail-on-finding` for CI), `docs/map_consistency.md` |
 | _(downstream)_ | AWML info / Deepen / CVAT / COCO / DLR **from** standard t4dataset annotation | Tier B/B' -> external formats | **existing t4devkit / webauto tooling — not maintained here** |
 | **L5 ros2 verification** | score the live Autoware node against our GT (detection + classification) | node rosbag -> `tlr_autolabel/v1` -> eval | `ros2_pipeline/`, `scripts/bag_to_labels.py`, `docs/eval_design.md` |
 | **L6 evaluation** | metrics vs GT: detection P/R/IoU + classification accuracy + confusion (two-source), plus the ledger profiles; RE level via driving_log_replayer_v2 | pred + GT -> `tlr_eval*` reports | `scripts/eval_vs_gt.py`, `scripts/evaluate_signals.py` |
@@ -320,6 +322,12 @@ Canonical -> db_tlr mapping:
 - **deepen format mapping** (Tier C): owned by the converter repo; align labels.
 - **L5 verification**: `ros2_pipeline/` unverified; acceptance test = parity
   with the launched int8 pipeline on the same frames.
+- **Map quality on cb7fd5c0**: the consistency check (`docs/map_consistency.md`)
+  found 281 readable detections with no lanelet2 signal projecting near them
+  (median 328 px from the nearest way, so missing rather than misplaced), and
+  separately showed way 3595 pairs in 94% of head-on frames by projection while
+  the matcher credits only 65% — i.e. an over-rejecting matcher, not a bad map.
+  Neither has been acted on yet.
 
 ---
 
@@ -818,11 +826,37 @@ same heads:
           "source": "manual_timeline_review",
           "note": ""
         }
+      ],
+      "visibility_decisions": {
+        "CAM_FRONT": [
+          {
+            "start_timestamp": 1783325718047571,
+            "end_timestamp": 1783325718947571,
+            "visibility": "occluded",
+            "review_status": "fixed",
+            "note": "truck passing in front of the signal"
+          }
+        ]
+      },
+      "roi_decisions": [
+        {
+          "annotation_token": "...",
+          "channel": "CAM_FRONT",
+          "box2d": [1234.5, 567.0, 1300.2, 620.4],
+          "review_status": "fixed"
+        }
       ]
     }
   ]
 }
 ```
+
+`visibility_decisions` and `roi_decisions` are both optional per group, so
+review files written before they existed remain valid. Visibility is keyed by
+camera channel because occlusion is view-dependent — one camera can be blocked
+while another sees the same physical signal fine. ROI is a flat list, not keyed
+by channel: each entry already carries the exact `annotation_token` it corrects.
+Full field list in `docs/re_timeline_review.md`.
 
 Application rules:
 
@@ -830,12 +864,29 @@ Application rules:
   `signal_kind`, and set `review_status`.
 - `rejected` decisions set only `review_status=rejected`.
 - `unchecked` decisions are retained in review JSON but are not applied.
-- `box2d`, `visibility`, `map_traffic_light_id`, `raw_state`,
-  `detector_score`, and `source_type` are never changed by this layer.
+- `visibility_decisions`: `accepted` / `fixed` set `visibility` on annotations
+  whose own `channel` equals the decision's channel; other statuses do nothing.
+- `roi_decisions`: `fixed` sets `box2d` on the one annotation whose `token`
+  equals `annotation_token`. `accepted` deliberately writes nothing — it only
+  records "geometry checked, already correct". Geometry never propagates across
+  frames, so this is an identity match, not an interval match.
+- State, visibility and ROI decisions apply independently; one annotation can
+  receive all three in a single run.
+- `map_traffic_light_id`, `regulatory_element_id`, `raw_state`,
+  `detector_score`, `source_type`, `occluded` and `annotation_uid` are never
+  changed by this layer, and `box2d` / `visibility` are preserved unless a
+  matching ROI / visibility decision overrides them.
 
-The normal human loop is: CVAT first for bbox/visibility/reject/map-id fixes,
-then re-run aggregation, then RE timeline review for state intervals, then
-`scripts/apply_re_review.py` to produce the reviewed A' sidecar consumed by L6.
+The normal human loop is: CVAT first for bbox creation / false-positive
+rejection / map-id fixes, then re-run aggregation, then the RE review for state
+intervals (plus bulk visibility and any box that drifted on a single frame),
+then `scripts/apply_re_review.py` to produce the reviewed A' sidecar consumed by
+L6. `python3 -m tlr_autolabel.review.re_review_all --dataset-root <ds> --serve`
+runs the review UI and both explanation views together, and regenerates the
+views after each commit; drafts auto-save to
+`traffic_signal_re_review.draft.json` and only "Export / commit" writes
+`traffic_signal_re_review.json`, so an interrupted session cannot silently
+become the reviewed output.
 
 ### object_ann-based annotation -> t4dataset B/B'
 
