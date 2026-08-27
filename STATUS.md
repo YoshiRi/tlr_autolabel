@@ -4,7 +4,7 @@
 (毎コミットではない)。役割分担: **能力・ゴール・成熟度はここだけ**、タスク
 (動詞)は PLAN、契約・IF・層は README、横断事実はプロジェクトメモリ。
 
-最終レビュー: 2026-08-07
+最終レビュー: 2026-08-27
 
 ## North Star
 
@@ -39,7 +39,7 @@
 | **G2** | **評価データの効率生成**(自動ラベル→地図付与→人手レビューで GT 化) | 主目的 | works-here | PLAN 2.5 |
 | **G3** | 新モデル立ち上げ(試走ベンチ)— 評価対象を素早く投入 | 手段 | reproducible | — |
 | **G4** | 既存アノテーション互換(AWML/T4/CVAT/deepen 相互変換) | 手段(互換制約) | works-here | PLAN 3(実 AWML 検証・優先度低) |
-| **G5** | 再現性・運用(パス/依存/来歴/一括実行/モデル管理) | 手段 | partial | PLAN 9 |
+| **G5** | 再現性・運用(パス/依存/来歴/一括実行/モデル管理) | 手段 | partial | PLAN 15(CI)→ 9 |
 | **G6** | ライブ検証(ros2 パリティ) | 手段(別枠) | not-started | PLAN 4 |
 
 ## Capabilities(具体的に動くもの)
@@ -54,14 +54,17 @@
 | L1 新モデル試走(素の --detector) | G3 | reproducible | ○ flexibility contract。多クラス/動的shape は明示エラー |
 | L1 入力の抽象化(images/video/rosbag2/T4 dataset) | G3/G2 | works-here | ○ `frames/` frame source。video/bag は先に1回展開して全構成が同一ピクセルを見る。実bagでの試走は未(△) |
 | L1 モデルIF plug-in(detector + classifier registry) | G3 | reproducible | ○ `detector_type`/`classifier_type`。新familyは1モジュール+registry登録。`--classifier none`で検出器のみ |
-| 構成×N の一括推論(`scripts/run_compare.py`) | G1/G3 | works-here | ○ matrix YAML。出力は素のTier Aディレクトリなので下流はそのまま使える。実GPU/実モデルでの試走は未(△) |
+| 構成×N の一括推論(`scripts/run_compare.py`) | G1/G3 | works-here | ○ matrix YAML。出力は素のTier Aディレクトリなので下流はそのまま使える。実モデル(960 ONNX)+ 実 `.engine` で試走済(RTX 3060/TRT10.8、engine構成3本の逐次実行で6GB OOMなし・orphan `trt_run` 0)。実bagのみ未(△) |
 | L6 比較(GTも地図も無し: 一致/不一致箇所/安定性/timing/並置グリッド) | G1 | works-here | ○ `scripts/compare_naive.py`。**差分の所在の可視化であって順位付けではない**(順位は地図参照 compare_runs.py かGT評価) |
 | L3 地図マッチ(lanelet2 投影+Hungarian) | G2 | works-here | ○ 84.7%マッチ(6カメラ) |
 | L3 時系列tracking(High/Low association + TTL) | G2 | experimental | △ 明示`--temporal-tracking`時のみON。low候補は既存track更新のみ、短欠落は`propagated`。Tier B converter defaultでは`tracked`/`propagated`を除外し、review aid扱い。現在投影bbox優先、無い場合は前回投影/前回bboxでfallback。同じ(channel,map way)はTTL後再観測でもtrack_id再利用。`TemporalAssociator.update -> TrackingResult`に集約。設定は`configs/tracking/bytetrack-lite.yaml`。合成T4 integration + cb7fd5c0 full smoke pass |
 | L3 融合+自動補正(フリップ修復/方向スナップ/未マッチ分類) | G2 | works-here | ○ |
 | L3 タイムライン可視化(レビュー優先度付き) | G2 | works-here | ○ build/tl_match/re_timeline.html |
 | L4 CVAT 往復(人手レビュー→GT化) | G1/G2 | works-here | ○ ロスレス 299/299。bbox/visibility/reject/map id修正の主経路 |
-| L4.5 RE timeline review(状態区間→A' sidecar伝播) | G1/G2 | works-here | ○ 代表crop候補付きHTML。c1af6a38 smoke: 24 RE→8 group、62 segment、2376 annotation更新、再aggregate成功。実GTレビューは未 |
+| L4.5 RE timeline review(状態区間 + カメラ別visibility + 単一フレームROI→A' sidecar伝播) | G1/G2 | works-here | ○ 代表crop候補付きHTML + ROIキャンバス編集。draft/commit 分離(auto-saveはcommit済ファイルに触れない)+ commit前per-entry diff + スキーマ検証。3種の decision は独立適用。c1af6a38 smoke: 24 RE→8 group、62 segment、2376 annotation更新、再aggregate成功。**実GTレビューは未**(道具側の穴は埋まった) |
+| L4.5 レビュー説明ビュー2面(per-frame / 俯瞰map) | G2 | works-here | ○ timeline は地図マッチ済グループ単位なので届かない箱がある(cb7fd5c0: 1642中742=**45%**、うち482が歩行者信号)。frame view=全体オーバーレイ+拡大crop+`unmatched_reason`、map view=ego経路+車線形状+Google Maps/Street Viewリンク(MGRS→WGS84 自作、pyproj と 0.088mm 一致・pyprojは非依存)。三面は現フレーム維持で相互リンク |
+| L4.5 単一ランチャー(`re_review_all`) | G2/G5 | works-here | ○ 三面生成 + `:8765` serve + 整合チェック + commit毎にビュー再生成(draft auto-saveでは再生成しない=ビューは確定結果のみ)。個別エントリポイントも維持 |
+| L4 地図/画像 整合チェック | G2 | works-here | ○ `review/re_map_consistency.py`。matcher判定と**独立**に再投影→`paired`/`map_only`/`image_only`→`unmapped_signal`/`signal_never_observed`/`low_observation_rate`。run全体で集約 + `unknown`除外 + 正対フレームのみ計上(誤警報対策)。`--fail-on-finding`。cb7fd5c0 で地図欠落281件と matcher 過剰却下(way 3595)を分離。**findings への対処は未着手** |
 | L2 COCO / CVAT 出力 | G4 | works-here | ○ |
 | L2 AWML 派生データセット | G4 | experimental | △ 互換手段。実 create_data で未検証(PLAN 3, 優先度低) |
 | L4 deepen 変換 | G4 | experimental | △ 契約表のみ・変換は他リポジトリ・未検証 |
@@ -71,28 +74,44 @@
 | L5 ros2 パリティ検証 | G6 | not-started | ✗ 隔離中。受入=launch int8 と一致 |
 | 一括実行(`scripts/run_dataset.py`) | G2/G5 | works-here | ○ 複数データセット・チャンネル自動発見 |
 | パス/依存の抽象化(TLR_MODEL_ROOT, requirements) | G5 | reproducible | ○ |
-| モデル管理(hash検証/engineキャッシュ/取得) | G5 | not-started | ✗ backlog(PLAN 9) |
+| モデル管理(hash検証/engineキャッシュ/取得) | G5 | partial | △ **hash来歴は完了**(sha256をTier A `meta`へ記録 + `configs/models.yaml` 既知good照合 → vendored classifier と公開ストアのバイト乖離を検知可)。engineキャッシュ・自動取得・ランタイム来歴(TRT版/GPU名/git commit)は未(PLAN 9) |
+| CI | G5 | not-started | ✗ `.github/workflows/` 無し。PRにチェックが付かない。テストは417件・約7秒・GPU不要なので費用対効果は高い(PLAN 15) |
 
 ## 今できないこと(能力の穴 — 主目的からの優先度順)
 
-1. **評価そのものがまだ回っていない(最大の穴)** — GT 指標が主目的の核なのに、
-   GT(レビュー済みラベル)が1件も無く L6 の GT ブロックが動かせない(G1←G2, PLAN 2.5)。
-2. **人間が確認したGTがまだ無い** — CVAT往復とRE timeline review基盤は通ったが、
-   実際に人が `accepted/fixed/rejected` を付けたラベルはまだ無い(G2, PLAN 2.5/2.7)。
-   これが 1 を塞いでいる。
-3. **run間比較の「どちらが良いか」がまだGTに載っていない** — 構成間の差分自体は
+1. **レビューループを通した GT がまだ無い(最大の穴)** — 対象データセット
+   (c1af6a38 / cb7fd5c0)で人が `accepted/fixed/rejected` を付けたラベルは0件。
+   つまり「効率的な GT 生成 → 評価」の一周(G2→G1)が閉じていない(PLAN 2.5/2.7)。
+   *区別すべき点*: L6 の GT ブロック自体は動く — 別データセットの**既存**人手
+   object_ann(ad266d7c 518箱)を借りて L1 を初測定済み(検出 P0.58/R0.85、
+   状態精度 0.78)。欠けているのは道具でも指標でもなく、**このループで作った GT**。
+   道具側の穴は PLAN 13/14 で埋まった(三面ビュー + 整合チェックが1コマンド)ので、
+   残っているのは実施そのもの。
+2. **run間比較の「どちらが良いか」がまだGTに載っていない** — 構成間の差分の所在は
    `compare_naive.py`(GTフリー)/`compare_runs.py`(地図参照)で出せるようになったが、
-   優劣を GT 上で示していない(G1)。
+   優劣を GT 上で示していない(G1)。1 が塞いでいる。
+3. **整合チェックの findings が未対処** — 測れるようになった(PLAN 14)が動かしていない:
+   ①cb7fd5c0 の地図欠落 281件(読める検出のそばに地図信号が投影されない、最近傍 way
+   まで中央値 328px)②way 3595 の matcher 過剰却下(投影 94% vs matcher 65%)。
+   ①は地図側、②は matcher 側の課題として既に分離できている(G2)。
 4. **複数データセットのスケール未実証** — 1データセットで1回動いただけ(G2/G5)。
-5. **モデルの内容同一性が未管理** — 評価結果とモデルの対応が名前依存(G5, PLAN 9)。
+5. **CI が無い** — `.github/workflows/` が存在せず PR にチェックが付かない。
+   417件・約7秒・GPU不要なので、空いている理由が無い穴(G5, PLAN 15)。
+6. **`.engine` の移植性とランタイム来歴** — モデルの内容同一性は sha256 で管理下に
+   入った(PLAN 9 前半)が、engine キャッシュ/自動ビルドと、評価結果に紐づく
+   ランタイム来歴(TRT版・GPU名・git commit)は未(G5)。
 
 互換系(AWML 実学習検証・deepen)は**手段**なので、上記が片付くまで優先度を下げる。
 
 ## 直近マイルストーン(主目的を前進させる的)
 
 - **【最優先】G2→G1 の接続**: c1af6a38 のフラグ上位フレームだけでも人手レビューする。
-  CVATでbbox/visibility/reject/map idを直し、RE timeline reviewでstate区間を確定し、
-  L6 の GT 指標を初回算出する。これで主目的「評価」が experimental→works-here に
-  上がり、同時に「効率的な GT 生成」も実証される。
-- **G1 run間比較**: 同じ GT 上で fp32 vs int8、tiles有無の精度差を数値化。
-- **G5**: モデル hash 検証だけ先行(評価結果の証跡として安く効く)。
+  `re_review_all` で三面を立ち上げ、CVATでbbox/reject/map idを直し、timeline で
+  state区間・カメラ別visibility・単一フレームROIを確定し、L6 の GT 指標を初回算出する。
+  これで主目的「評価」が experimental→works-here に上がり、同時に「効率的な GT 生成」も
+  実証される。**道具は揃ったので、次のマイルストーンは道具作りではなく運用**。
+- **G1 run間比較**: 同じ GT 上で fp32 vs int8、tiles有無の精度差を数値化
+  (構成×N の実行と GTフリー比較は PLAN 12 で通した)。
+- **G2 地図品質**: 整合チェックの findings 上位を Street View で実在確認し、
+  地図修正が必要な分と matcher 側で直す分に振り分ける。
+- **G5**: CI(安い・すぐ効く)→ engine キャッシュとランタイム来歴。

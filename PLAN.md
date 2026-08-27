@@ -3,7 +3,7 @@
 作業計画の単一管理ファイル。タスクの追加・完了・方針変更はここを更新する。
 設計の契約は README.md 冒頭(処理層 / Tier A-C + B-review)。矛盾時は README を正とする。
 
-最終更新: 2026-08-07
+最終更新: 2026-08-27
 
 ## ✅ 完了(日付順)
 
@@ -28,7 +28,10 @@
 | 07-28 | **B/B' IF文書の再明確化**: B/B'の正しいt4dataset IFは `object_ann.json` 系 + `traffic_light.json` のみと再確認。`traffic_signal_2d/v2` / `traffic_signal_re/v1` / `traffic_signal_re_review/v1` / `traffic_light_map_association.json` はこのRepo内のA/A'側またはtemporary/deprecated sidecarであり、B/B'判定・納品IFには含めない。 |
 | 07-31 | **TIER B IF再確認**: `annotation/traffic_light.json` は `{token, instance_token, primitive_id}`。B/B'差分はこのファイルの有無だけで、RE/group relationはmapから解決する。 |
 | 07-31 | **フィールド名を t4devkit実スキーマへ統一**: `traffic_light.json` の第3フィールドを repo-local な `traffic_light_linestring_id` から t4devkit準拠の `primitive_id` へ全ファイル(コード/README/docs)でリネーム。schemaは引き続き `{token, instance_token, primitive_id}`(値は変わらずlanelet2 way id) |
-| 08-07 | **推論比較ハーネス**(PLAN 12): L1 の入力抽象化(images/video/rosbag/T4)+ 設定のデータ化 + Pipeline 化 + classifier registry を土台に、`run_compare.py`(構成×N を同一フレームで実行)と `compare_naive.py`(GTも地図も無しで一致/不一致/安定性/timing/並置グリッド)を追加。Tier A は追加キーのみで v1 維持(before/after 14 payload 差分ゼロ)。`docs/inference_comparison.md` |
+| 08-07 | **推論比較ハーネス**(PLAN 12): L1 の入力抽象化(images/video/rosbag/T4)+ 設定のデータ化 + Pipeline 化 + classifier registry を土台に、`run_compare.py`(構成×N を同一フレームで実行)と `compare_naive.py`(GTも地図も無しで一致/不一致/安定性/timing/並置グリッド)を追加。Tier A は追加キーのみで v1 維持(before/after 14 payload 差分ゼロ)。`docs/inference_comparison.md`。**PR #9 として 08-27 に main へマージ** |
+| 08-10 | **L4.5 レビューUIの三面化**(PR #8): timeline が「地図マッチした信号グループ」単位のため見えていなかった箱(cb7fd5c0 で 1642 中 742 = **45%**、うち 482 が歩行者信号)を、per-frame view(全体オーバーレイ + 拡大crop)と俯瞰 map view(車線形状・横断歩道・停止線 + Google Maps/Street View リンク)で可視化。ROI(box2d)キャンバス編集、カメラ別 visibility 区間、draft/commit 分離(auto-save は commit 済ファイルに触れない)、commit 前の per-entry diff、三面の相互リンク(現フレーム維持)、単一ランチャー `re_review_all`(commit 毎にビュー再生成)。MGRS→WGS84 自作変換は pyproj と 0.088mm 一致(pyproj は依存に入れない) |
+| 08-14 | **地図/画像 整合チェック**(PR #10): 「地図と画像が食い違う」を目視から**数値**へ。matcher の判定とは独立に lanelet2 信号を全フレームへ再投影し `paired`/`map_only`/`image_only` に分類 → `unmapped_signal`(地図の欠落)/`signal_never_observed`(実在しない地図エントリ)/`low_observation_rate`(位置姿勢誤差か恒常遮蔽)。誤警報対策として ①`unknown` state と低score検出を除外 ②正対フレームのみ observability に計上(way 3281 は除外前は phantom 報告、67-73°で読めないだけ)。map view にオーバーレイ、`--fail-on-finding` で CI 化可能。`docs/map_consistency.md` |
+| 08-21 | **モデル来歴の hash 管理**(PR #7、PLAN 9): detector/classifier の sha256 を Tier A `meta` に記録し `configs/models.yaml` の既知good と照合。vendored classifier(300af04)と公開ストア(ed6c574/awf4.1)のバイト乖離を検知できる状態に |
 
 ## 📋 残タスク(実行順)
 
@@ -62,6 +65,9 @@
 - [x] `apply_re_review.py`: review JSON をCVAT import済みA' sidecarに重ね、`state`/`signal_kind`/`review_status`だけ伝播
 - [x] c1af6a38既存成果物でsmoke test(推論再走なし): accepted仮template 62 decisions → 2376 annotations更新、overlap 0、再aggregate成功
 - [ ] 実レビュー運用: CVATでbbox/visibilityを直した後、RE timeline reviewでstateを確定し、L6 GT指標を初回算出
+      (**2026-08-27 現在: 道具側は項目13/14で揃った** — `re_review_all` で三面 + 整合チェックが
+      1コマンドで立ち上がり、timeline が届かなかった 45% の箱も frame view で見える。
+      残っているのは人手レビューの実施そのもの)
 
 ### 2.5 CVAT レビューラウンド1 → autolabel 評価(Claude 側トラックで追跡)
 位置づけ確定(2026-07-19、ユーザー決定): GTは常に人力作成。評価層(L6)は
@@ -343,7 +349,7 @@ autolabelingで再現可能に選べるようにする。出力IFは既存
 ### 9. [進行中 2026-08-02] モデル管理(再現性の深掘り)
 「.engine の移植不可」と「モデルの内容同一性」を根治する塊。公開手続きは急がない前提で
 **社内利用向けに hash ベース管理から着手**(2026-08-02 方針変更、旧: 必要まで保留)。
-- [x] hash ベース来歴: `configs/models.yaml`(sha256 キーの既知good登録)+ `core/models.py`。
+- [x] hash ベース来歴(**PR #7、2026-08-21 マージ**): `configs/models.yaml`(sha256 キーの既知good登録)+ `core/models.py`。
       L1 が detector/classifier の sha256 を `meta` に記録、既知なら人間名も付与、未登録 .onnx は警告。
       → **vendored classifier(300af04)と公開ストア(ed6c574/awf4.1)のバイト乖離を検知できる状態に**
 - [ ] `--classifier` 既定を公開ストア寄りに、vendored `models/*.onnx` は乖離解消後に廃止候補
@@ -386,7 +392,7 @@ autolabelingで再現可能に選べるようにする。出力IFは既存
       `--classifier-type`(既定 `lamp_recognizer`)。`--classifier none` で検出器のみ実行。
       正準 lamp list が families 間の共通契約(全体1ラベル型は1要素で返す規約)
 
-### 12. [done 2026-08-07] 推論比較ハーネス(任意入力 × 任意モデル組合せ)
+### 12. [done 2026-08-07 / merged 2026-08-27 as PR #9] 推論比較ハーネス(任意入力 × 任意モデル組合せ)
 設計・契約: `docs/inference_comparison.md`。「任意の画像/動画/rosbag を食わせて
 各組合せの naive 出力を比較する」を、新フォーマットを増やさずに実現する
 (各構成の出力は**素の Tier A ラベルディレクトリ**なので既存の下流ツールがそのまま使える)。
@@ -438,6 +444,73 @@ autolabelingで再現可能に選べるようにする。出力IFは既存
       (naive 比較は地図なし前提のまま)
 - [ ] `cli/match.py`(814行)分割・データIFのコード内スキーマ化は**触る時ついで**で対応(単独着手しない)
 
+### 13. [done 2026-08-10、PR #8] L4.5 レビューUIの三面化(timeline が届かない箱の可視化)
+きっかけ: timeline は「地図マッチした信号グループ×時系列」で編集する構造なので、
+**マッチしなかった箱にレビュー担当者が一度も到達できていなかった**。cb7fd5c0 では
+1642 箱のうち 742(45%)、うち 482 が歩行者信号。「見えないものはレビューできない」。
+- [x] timeline を編集UIとして拡張: ROI(box2d)キャンバス編集(8ハンドル・数値入力・
+      カーソル基準ホイールズーム・行内フレーム送り・前後フレームからROIコピー、
+      `annotation_token` 完全一致で適用)、カメラ別 visibility 区間
+      (遮蔽は視点依存なので channel 別、state は物理グループ共通)
+- [x] draft/commit 分離: `traffic_signal_re_review.draft.json`(auto-save)と
+      `traffic_signal_re_review.json`(Export/commit のみ)を別ファイルに。
+      auto-save は commit 済ファイルに触れないので、中断したセッションが黙って
+      レビュー済み出力になることがない。commit 前に per-entry diff を提示、原子的書込、
+      スキーマ検証、loopback bind のみ
+- [x] 読み取り専用の説明ビュー2つ: `re_frame_view.py`(全体オーバーレイ=実線matched/
+      破線unmatched + 拡大crop列 + `unmatched_reason`/却下 `map_candidate_id`。
+      信号は 2880x1860 中 ~46x23px なので全体図だけでは読めない。crop はクライアント側描画)、
+      `re_map_view.py`(俯瞰 ego 経路 + 車線/横断歩道/交差点/停止線 + Google Maps・
+      Street View リンク、MGRS→WGS84 自作変換 `map/geo.py`)
+- [x] 三面の相互リンクは**現フレームを維持**(`#token=` / `#ch=&t=`)。両ビューは
+      `--review` でレビュー適用後の状態を描画し header に reviewed 表示
+- [x] 単一ランチャー `re_review_all`(3面生成 + `:8765` で serve + commit 毎に
+      ビュー再生成。draft の auto-save では再生成しない=ビューは確定結果のみ反映)。
+      個別エントリポイントも維持(1面だけデバッグできる)
+- [x] `t4/dataset.py`: t4devkit 非依存の軽量 T4 reader。`load_t4_index()` は
+      実 668 フレームで戻り値ビット同一を確認
+- [x] 検証: MGRS→WGS84 が pyproj と 0.088mm 一致(奇数53/偶数54ゾーン、pyproj は
+      **依存に入れない**ので baked-in 参照値を pin)、cb7fd5c0 は 36.4029N/136.4117E
+      = 石川県小松(bag名の `Komatsu` と frame 内の道路標識と一致)、
+      draft/commit の中断・再開・30連続保存・不正リクエスト、両ビューのサーバ側 PIL 再描画照合、
+      相互リンク解決(137/137 crop候補・900/900 ROIフレーム・668/668 frame→map)
+- [ ] このUIで**実際に人手レビューを1ラウンド回す**(= 2.5/2.7 の残件そのもの。
+      道具側の穴はこれで埋まった)
+
+### 14. [done 2026-08-14、PR #10] 地図/画像 整合チェック(不一致を数値化)
+#8 のフォロー。ビューで不一致が**見える**ようになったので、次は**測れる**ように —
+地図を差し替えたとき「数字が動いたか」で判断できるようにする。
+- [x] `review/re_map_consistency.py`: matcher の判定とは**独立**に、matcher 自身の
+      `project_traffic_lights()` で全 lanelet2 信号を各フレームへ再投影し、画像空間で
+      アノテーション箱と対応付け(競合考慮=近い検出が勝つ、1検出が2投影を満たさない)。
+      各フレームを `paired` / `map_only` / `image_only` に分類
+- [x] この独立性が要点: **過剰却下している matcher** と **実際に間違っている地図** を
+      分離できる。cb7fd5c0 で way 3595 は投影ベースだと正対フレームの 94% で pair するが
+      matcher は 65% しか認めない(→ 地図は正しく matcher の問題)、一方 281 件の
+      読める検出はどの地図信号も近くに投影されない(→ 地図の問題、最近傍 way まで中央値 328px)
+- [x] 誤警報対策: findings は run 全体で集約(フレーム毎には出さない)、`unknown` state は
+      除外(筐体裏面が多く「地図が間違っている」根拠に弱い)、`--min-detector-score`、
+      **正対フレームのみ observability に計上**(斜めからは `front_oblique` で 70-80° の
+      matched率が 12% に崩落する。除外しないと way 3281 を phantom と誤報告した — 実際は
+      この run が見る 67-73° では読めないだけ)
+- [x] finding 種別: `unmapped_signal`(地図の欠落)/`signal_never_observed`(実在しない
+      地図エントリ)/`low_observation_rate`(位置姿勢誤差か恒常遮蔽)。map view に
+      オーバーレイ(`map_only` の way をリング表示、トグルで消せる)、`--output` で JSON、
+      `--fail-on-finding` で exit 1、`re_review_all` が通常フローの一部として実行
+      (`--no-consistency` でスキップ)。存在しないレポートを指定したらエラー(typo が
+      clean run に見えない)
+- [ ] **findings への対処が未着手**: ①281 件の unmapped detection(地図側の欠落 —
+      Street View で実在確認 → 地図修正の要否判断)②way 3595 の matcher 過剰却下
+      (matcher 側のパラメータ/判定見直し)
+- [ ] `--fail-on-finding` の CI 接続は CI 自体が無いので保留(項目15)
+
+### 15. [未着手 2026-08-27] CI(テストと整合チェックの自動実行)
+`.github/workflows/` が存在せず、PR にチェックが1つも付かない。テストは
+**417件が約7秒・GPU不要**(fake backend)なので、費用対効果が高いのに空いている穴。
+- [ ] PR で `python3 -m unittest discover -s tests -p 'test_*.py' -t tests` を回す
+      ワークフロー(テスト実行の作法はプロジェクトメモリにあるものと同一に保つ)
+- [ ] (任意)データセットが用意できる環境では `re_map_consistency --fail-on-finding`
+
 ### 6. [backlog] 高速化の続き(現状 0.78s/frame で実用十分。必要になったら)
 - [ ] フレーム間パイプライン化(JPEG デコード/前処理と GPU の重なり)→ ~0.3s/frame 見込み
 - [ ] タイルのバッチ推論(エンジンを batch=5 でリビルド)
@@ -453,4 +526,17 @@ autolabelingで再現可能に選べるようにする。出力IFは既存
   3. `python3 scripts/aggregate_regulatory_signals.py --dataset-root <dataset>`
   4. `python3 scripts/render_re_timeline.py --dataset-root <dataset>` → `build/tl_match/re_timeline.html`
   5. `python3 scripts/evaluate_signals.py --dataset-root <dataset> [--baseline <old_sidecar>]` → `build/tl_match/eval_report.{json,md}`
+- 人手レビューの標準手順(項目13/14):
+  1. `python3 -m tlr_autolabel.review.re_review_all --dataset-root <dataset> --serve`
+     → 三面(timeline / frame view / map view)+ 地図整合チェックを生成し `:8765` で serve。
+     commit 毎にビューを再生成する(draft の auto-save では再生成しない)
+  2. UI で state区間 / カメラ別visibility / 単一フレームROI を確定 → **Export / commit**
+     (auto-save は `traffic_signal_re_review.draft.json`、commit のみ
+     `traffic_signal_re_review.json` を書く)
+  3. `python3 scripts/apply_re_review.py` → レビュー済み A' sidecar(L6 が読む)
+  4. 上記手順3-5(aggregate → timeline → evaluate)を再実行
+- 比較したいとき: `python3 scripts/run_compare.py`(構成×N を同一フレームで)→
+  `python3 scripts/compare_naive.py`(GT・地図なしの差分の所在。順位付けではない)
+- テスト: `python3 -m unittest discover -s tests -p 'test_*.py' -t tests`
+  (`PYTHONPATH=.` を付けると subprocess テストが壊れる)。2026-08-27 現在 417件 pass
 - このファイルと README、プロジェクトメモリ(`.claude-mine/.../memory/`)が3点セット
