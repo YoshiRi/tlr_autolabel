@@ -35,10 +35,11 @@ class FakeDetector:
 
 
 class FakeClassifier:
-    def __init__(self, _model_path, _param_path, _args):
+    def __init__(self, _model_path, _param_path, _args, model_type=None):
         self.width = 32
         self.height = 32
         self.backend = "fake"
+        self.kind = model_type or "lamp_recognizer"
 
     def classify(self, _img, _bbox):
         return [{"label": "red-circle", "color": "red", "shape": "circle",

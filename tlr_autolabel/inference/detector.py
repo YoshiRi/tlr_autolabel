@@ -255,10 +255,16 @@ def detect_in_orig(detector, img, score_thr):
 
 def tile_origins(size, net, min_overlap=128):
     """Top-left offsets of `net`-sized tiles covering `size` with at least
-    `min_overlap` px overlap between neighbours. [0] when it already fits."""
+    `min_overlap` px overlap between neighbours. [0] when it already fits.
+
+    The overlap is clamped to half the net size: an overlap >= net leaves no
+    step at all (the tile stride would be zero or negative), which used to reach
+    the covering formula as a division by zero. Small-net models (or a preset
+    that keeps the 128 px default with a 128 px net) hit exactly that."""
     if size <= net:
         return [0]
-    n = math.ceil((size - net) / (net - min_overlap)) + 1
+    step = net - min(min_overlap, net // 2)
+    n = math.ceil((size - net) / step) + 1
     return [round(i * (size - net) / (n - 1)) for i in range(n)]
 
 

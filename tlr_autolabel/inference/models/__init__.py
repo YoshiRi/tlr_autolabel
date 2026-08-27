@@ -12,16 +12,27 @@ from __future__ import annotations
 
 from typing import Callable
 
-from tlr_autolabel.inference.models.base import DetectorModel
+from tlr_autolabel.inference.models.base import ClassifierModel, DetectorModel
 
 _DETECTORS: dict[str, Callable[..., DetectorModel]] = {}
+_CLASSIFIERS: dict[str, Callable[..., ClassifierModel]] = {}
 _BUILTINS_LOADED = False
+
+DEFAULT_CLASSIFIER_TYPE = "lamp_recognizer"
 
 
 def register_detector(name: str):
     """Decorator: register a DetectorModel factory under `name`."""
     def deco(factory: Callable[..., DetectorModel]):
         _DETECTORS[name] = factory
+        return factory
+    return deco
+
+
+def register_classifier(name: str):
+    """Decorator: register a ClassifierModel factory under `name`."""
+    def deco(factory: Callable[..., ClassifierModel]):
+        _CLASSIFIERS[name] = factory
         return factory
     return deco
 
@@ -37,12 +48,19 @@ def load_builtins() -> None:
     if _BUILTINS_LOADED:
         return
     _BUILTINS_LOADED = True
-    from tlr_autolabel.inference.models import comlops, yolox  # noqa: F401
+    from tlr_autolabel.inference.models import (  # noqa: F401
+        comlops, lamp_recognizer, yolox,
+    )
 
 
 def list_detectors() -> list[str]:
     load_builtins()
     return sorted(_DETECTORS)
+
+
+def list_classifiers() -> list[str]:
+    load_builtins()
+    return sorted(_CLASSIFIERS)
 
 
 def infer_detector_type(n_out: int) -> str:
@@ -64,3 +82,17 @@ def build_detector_model(model_type: str, model_path: str, params: dict) -> Dete
             f"unknown detector_type {model_type!r}; available: "
             f"{', '.join(sorted(_DETECTORS))}")
     return _DETECTORS[model_type](model_path=model_path, params=params)
+
+
+def build_classifier_model(model_type: str | None, model_path: str,
+                           params: dict) -> ClassifierModel:
+    """Resolve a classifier family. Unlike the detector side there is no
+    output-shape guess: absent `classifier_type` means the one historical
+    family (`lamp_recognizer`), which is what every existing preset implies."""
+    load_builtins()
+    model_type = model_type or DEFAULT_CLASSIFIER_TYPE
+    if model_type not in _CLASSIFIERS:
+        raise SystemExit(
+            f"unknown classifier_type {model_type!r}; available: "
+            f"{', '.join(sorted(_CLASSIFIERS))}")
+    return _CLASSIFIERS[model_type](model_path=model_path, params=params)

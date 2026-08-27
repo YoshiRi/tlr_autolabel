@@ -34,6 +34,16 @@ class TileOriginsTest(unittest.TestCase):
         self.assertEqual(origins[0], 0)
         self.assertEqual(origins[-1], 2000 - 960)
 
+    def test_overlap_at_or_above_net_still_covers(self):
+        # overlap >= net leaves no tile step; it must be clamped, not divide by zero
+        for overlap in (64, 128, 1000):
+            origins = tile_origins(200, 64, min_overlap=overlap)
+            self.assertEqual(origins[0], 0)
+            self.assertEqual(origins[-1], 200 - 64)
+            self.assertGreater(len(origins), 1)
+            steps = [b - a for a, b in zip(origins, origins[1:])]
+            self.assertTrue(all(0 < s <= 64 for s in steps), steps)
+
 
 class ClippedDetectionBoxTest(unittest.TestCase):
     def test_clips_to_image_bounds(self):

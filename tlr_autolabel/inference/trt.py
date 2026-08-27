@@ -3,6 +3,7 @@
 Extracted from tlr_autolabel.py.
 """
 import os
+import shutil
 import subprocess
 import tempfile
 from pathlib import Path
@@ -43,6 +44,32 @@ class TrtServer:
                 break
         assert self.in_shape and self.out_shape, "trt_run did not report tensor shapes"
         self.tmp = tempfile.mkdtemp(prefix="trt_run_")
+
+    def close(self):
+        """Stop the helper process and remove its scratch dir. A comparison run
+        loads one engine per configuration in sequence, so leaving `trt_run`
+        processes (and their deserialized engines) resident would run the GPU
+        out of memory a few configurations in."""
+        proc = getattr(self, "proc", None)
+        if proc is not None and proc.poll() is None:
+            if proc.stdin is not None:
+                try:
+                    proc.stdin.close()
+                except (OSError, ValueError):
+                    pass
+            proc.terminate()
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+        self.proc = None
+        shutil.rmtree(getattr(self, "tmp", None) or "", ignore_errors=True)
+
+    def __del__(self):
+        try:
+            self.close()
+        except Exception:  # interpreter teardown: nothing useful to do here
+            pass
 
     def run(self, blob):
         ip = os.path.join(self.tmp, "in.f32")

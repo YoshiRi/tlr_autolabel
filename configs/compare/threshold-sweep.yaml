@@ -1,0 +1,22 @@
+# One detector, several score thresholds — plus a detector-only run.
+#
+#   python3 scripts/run_compare.py --matrix configs/compare/threshold-sweep.yaml \
+#       ~/data/CAM_FRONT --out build/compare/thr --compare --reference thr035
+#
+# `boxes_only` classifies nothing (`classifier: none`): it isolates the detector
+# side, which is what you want when the question is recall, not state.
+schema_version: tlr_compare_matrix/v1
+
+combos:
+  - name: thr020
+    preset: yolox-960-int8
+    overrides: {det_score_thr: 0.2}
+  - name: thr035
+    preset: yolox-960-int8
+    overrides: {det_score_thr: 0.35}
+  - name: thr050
+    preset: yolox-960-int8
+    overrides: {det_score_thr: 0.5}
+  - name: boxes_only
+    preset: yolox-960-int8
+    overrides: {det_score_thr: 0.35, classifier: none}
