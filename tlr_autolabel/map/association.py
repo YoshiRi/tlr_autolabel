@@ -1,6 +1,28 @@
 """Detection-to-map-projection association (REFACTOR_PLAN.md phase 5).
 
 Extracted from match_traffic_lights.py.
+
+Two boxes come out of a map candidate, and they are deliberately different:
+
+  * the *cost box* -- what the detection is scored against. For a housing-level
+    detection that is the candidate's full projection. For a lamp-level one it
+    is the slot inside the projection where that lamp belongs, so IoU and the
+    size-ratio test compare like with like instead of a lamp against a housing.
+    `target_box_fn(det, cand) -> box` supplies it; None means "the projection",
+    which is the original behavior.
+`penalty_fn(det, cand) -> float` adds to a pair's cost after the rules above
+have scored it. Geometry alone cannot separate two signals bolted back to back
+on one mast: they sit under a metre apart and project to nearly the same box,
+so the assignment picks between them arbitrarily. A readable colour tells us
+which one we are looking at -- you cannot read a lamp through the back of the
+housing -- and that is knowledge no box overlap contains.
+
+  * the *gate box* -- always the full projection. The gate answers "could this
+    detection plausibly be this signal at all", and narrowing it to one slot
+    would reject correct pairings whenever the projection is laterally off by
+    about a slot width (measured: ~0.36 of the housing width on the Komatsu
+    run, uniform across ways, so it is a projection offset and not per-signal
+    map error). Scoring tolerates that; gating must not.
 """
 from __future__ import annotations
 
@@ -23,12 +45,22 @@ def center(box):
     return np.array([(box[0] + box[2]) * 0.5, (box[1] + box[3]) * 0.5])
 
 
+def target_box(cand, det, target_box_fn=None):
+    """The box a detection should be compared against for this candidate."""
+    if target_box_fn is not None:
+        box = target_box_fn(det, cand)
+        if box is not None:
+            return box
+    return cand["bbox"]
+
+
 def _solve_assignment(cost, n_cand, unmatch_cost):
     rows, cols = linear_sum_assignment(cost)
     return {int(i): int(j) for i, j in zip(rows, cols) if j < n_cand and cost[i, j] < unmatch_cost}
 
 
-def match_boxes_legacy(detections, candidates, gate_factor=1.5, min_iou=0.05, unmatch_cost=1.5):
+def match_boxes_legacy(detections, candidates, gate_factor=1.5, min_iou=0.05,
+                       unmatch_cost=1.5, target_box_fn=None, penalty_fn=None):
     """One-to-one Hungarian matching. Returns {det_index: cand_index}.
 
     Costs: overlapping pairs cost 1 - IoU (0..1); non-overlapping pairs within
@@ -47,11 +79,13 @@ def match_boxes_legacy(detections, candidates, gate_factor=1.5, min_iou=0.05, un
         dbox = det["box_xyxy"]
         ddiag = np.hypot(dbox[2] - dbox[0], dbox[3] - dbox[1])
         for j, cand in enumerate(candidates):
-            cbox = cand["bbox"]
+            cbox = target_box(cand, det, target_box_fn)
             cdiag = np.hypot(cbox[2] - cbox[0], cbox[3] - cbox[1])
+            gbox = cand["bbox"]
+            gdiag = np.hypot(gbox[2] - gbox[0], gbox[3] - gbox[1])
             overlap = iou(dbox, cbox)
             dist = float(np.linalg.norm(center(dbox) - center(cbox)))
-            gate = gate_factor * max(cdiag, ddiag)
+            gate = gate_factor * max(gdiag, ddiag)
             size_ratio = max(ddiag, cdiag) / max(min(ddiag, cdiag), 1e-6)
             if overlap >= min_iou:
                 cost[i, j] = 1.0 - overlap
@@ -59,11 +93,14 @@ def match_boxes_legacy(detections, candidates, gate_factor=1.5, min_iou=0.05, un
                 # offset fallback: sizes must agree, since projection error
                 # shifts boxes but barely changes their scale
                 cost[i, j] = 1.0 + dist / max(gate, 1e-6)
+            if penalty_fn is not None and cost[i, j] < big:
+                cost[i, j] += penalty_fn(det, cand)
     matches = _solve_assignment(cost, n_cand, unmatch_cost)
     return matches, {i: "legacy" for i in matches}
 
 
-def _build_cost(detections, candidates, det_indices, cand_indices, rules, unmatch_cost):
+def _build_cost(detections, candidates, det_indices, cand_indices, rules,
+                unmatch_cost, target_box_fn=None, penalty_fn=None):
     big = 1e6
     cost = np.full((len(det_indices), len(cand_indices) + len(det_indices)), big)
     cost[:, len(cand_indices):] = unmatch_cost
@@ -72,8 +109,10 @@ def _build_cost(detections, candidates, det_indices, cand_indices, rules, unmatc
         dbox = detections[det_i]["box_xyxy"]
         ddiag = np.hypot(dbox[2] - dbox[0], dbox[3] - dbox[1])
         for cj, cand_j in enumerate(cand_indices):
-            cbox = candidates[cand_j]["bbox"]
+            cbox = target_box(candidates[cand_j], detections[det_i], target_box_fn)
             cdiag = np.hypot(cbox[2] - cbox[0], cbox[3] - cbox[1])
+            gbox = candidates[cand_j]["bbox"]
+            gdiag = np.hypot(gbox[2] - gbox[0], gbox[3] - gbox[1])
             overlap = iou(dbox, cbox)
             dist = float(np.linalg.norm(center(dbox) - center(cbox)))
             size_ratio = max(ddiag, cdiag) / max(min(ddiag, cdiag), 1e-6)
@@ -85,18 +124,20 @@ def _build_cost(detections, candidates, det_indices, cand_indices, rules, unmatc
                     stages[(ri, cj)] = rule["stage"]
                     break
                 if rule["kind"] == "distance":
-                    gate = rule["gate_factor"] * max(cdiag, ddiag)
+                    gate = rule["gate_factor"] * max(gdiag, ddiag)
                     if dist > gate or size_ratio > rule["max_size_ratio"]:
                         continue
                     cost[ri, cj] = 1.0 + dist / max(gate, 1e-6)
                     stages[(ri, cj)] = rule["stage"]
                     break
+            if penalty_fn is not None and cost[ri, cj] < big:
+                cost[ri, cj] += penalty_fn(detections[det_i], candidates[cand_j])
     return cost, stages
 
 
 def match_boxes_staged(detections, candidates, gate_factor=1.5, strict_min_iou=0.05,
                        relaxed_min_iou=0.01, relaxed_size_ratio=8.0,
-                       relaxed_unmatch_cost=2.25):
+                       relaxed_unmatch_cost=2.25, target_box_fn=None, penalty_fn=None):
     """Two-pass one-to-one matching.
 
     Pass 1 uses only IoU, so high-quality overlaps are claimed first. Pass 2
@@ -117,6 +158,8 @@ def match_boxes_staged(detections, candidates, gate_factor=1.5, strict_min_iou=0
         cand_indices,
         [{"kind": "iou", "min_iou": strict_min_iou, "stage": "strict_iou"}],
         unmatch_cost=1.5,
+        target_box_fn=target_box_fn,
+        penalty_fn=penalty_fn,
     )
     strict_local = _solve_assignment(strict_cost, len(cand_indices), 1.5)
     matches = {det_indices[i]: cand_indices[j] for i, j in strict_local.items()}
@@ -146,6 +189,8 @@ def match_boxes_staged(detections, candidates, gate_factor=1.5, strict_min_iou=0
             },
         ],
         unmatch_cost=relaxed_unmatch_cost,
+        target_box_fn=target_box_fn,
+        penalty_fn=penalty_fn,
     )
     relaxed_local = _solve_assignment(relaxed_cost, len(rem_cand), relaxed_unmatch_cost)
     for i, j in relaxed_local.items():
@@ -158,10 +203,13 @@ def match_boxes_staged(detections, candidates, gate_factor=1.5, strict_min_iou=0
 
 def match_boxes(detections, candidates, mode="legacy", gate_factor=1.5,
                 strict_min_iou=0.05, relaxed_min_iou=0.01,
-                relaxed_size_ratio=8.0, relaxed_unmatch_cost=2.25):
+                relaxed_size_ratio=8.0, relaxed_unmatch_cost=2.25,
+                target_box_fn=None, penalty_fn=None):
     if mode == "legacy":
         return match_boxes_legacy(detections, candidates, gate_factor=gate_factor,
-                                  min_iou=strict_min_iou)
+                                  min_iou=strict_min_iou,
+                                  target_box_fn=target_box_fn,
+                                  penalty_fn=penalty_fn)
     return match_boxes_staged(
         detections,
         candidates,
@@ -170,10 +218,13 @@ def match_boxes(detections, candidates, mode="legacy", gate_factor=1.5,
         relaxed_min_iou=relaxed_min_iou,
         relaxed_size_ratio=relaxed_size_ratio,
         relaxed_unmatch_cost=relaxed_unmatch_cost,
+        target_box_fn=target_box_fn,
+        penalty_fn=penalty_fn,
     )
 
 
-def unmatched_reason(det, det_state, candidates, matches, gate_factor=1.5):
+def unmatched_reason(det, det_state, candidates, matches, gate_factor=1.5,
+                     target_box_fn=None):
     """Classify why a detection stayed unmatched (review triage; report-only).
     Categories, checked in order:
       state_unknown_backside  — classifier saw no lamps (likely back/side view)
@@ -188,12 +239,13 @@ def unmatched_reason(det, det_state, candidates, matches, gate_factor=1.5):
         return "no_map_candidate_in_view"
     dbox = det["box_xyxy"]
     ddiag = np.hypot(dbox[2] - dbox[0], dbox[3] - dbox[1])
-    dists = [float(np.linalg.norm(center(dbox) - center(c["bbox"]))) for c in candidates]
+    dists = [float(np.linalg.norm(center(dbox) - center(target_box(c, det, target_box_fn))))
+             for c in candidates]
     j = int(np.argmin(dists))
     if j in set(matches.values()):
         return "candidate_taken"
-    cbox = candidates[j]["bbox"]
-    cdiag = np.hypot(cbox[2] - cbox[0], cbox[3] - cbox[1])
-    if dists[j] > gate_factor * max(cdiag, ddiag):
+    gbox = candidates[j]["bbox"]
+    gdiag = np.hypot(gbox[2] - gbox[0], gbox[3] - gbox[1])
+    if dists[j] > gate_factor * max(gdiag, ddiag):
         return "beyond_gate"
     return "geometry_mismatch"

@@ -22,7 +22,8 @@ REQUIRED_ATTRIBUTE_KEYS = {
     "state", "signal_kind", "visibility", "review_status",
     "map_traffic_light_id", "regulatory_element_id", "map_candidate_id",
     "regulatory_element_id_candidate", "unmatched_reason", "facing",
-    "raw_state", "detector_score", "source_type",
+    "raw_state", "detector_score", "state_score", "source_type", "box_level",
+    "source_track_id", "source_track_name", "source_detection_id",
 }
 
 

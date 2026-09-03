@@ -67,6 +67,51 @@ def load_lanelet2_traffic_lights(osm_path: Path):
     return traffic_lights, regulatory_by_way
 
 
+def find_back_to_back_pairs(traffic_lights, max_distance=3.0, max_height_diff=1.5,
+                            min_normal_angle_deg=135.0):
+    """Map ways that are the same physical mast seen from opposite sides.
+
+    Two vehicle signals bolted back to back on one mast are two separate ways
+    whose face normals point opposite ways -- which is correct mapping, not a
+    winding error. But they sit under a metre apart, so they project to nearly
+    the same box and the assignment has no geometric reason to prefer either.
+    Measured on the Odaiba rinkai map: 34 such pairs among 410 ways, median
+    separation 0.89 m, every one of them `red_yellow_green`; and every way that
+    collected a "colored state on a back face" flag turned out to be the back
+    member of one.
+
+    Returns {way_id: partner_way_id}, always symmetric: pairs are formed
+    closest-first and a way joins at most one, so three ways clustered on the
+    same mast cannot produce a chain of half-relations.
+    """
+    import itertools
+
+    centres, normals = {}, {}
+    for way_id, tl in traffic_lights.items():
+        if tl["facing_axis"] is None:
+            continue
+        centres[way_id] = tl["corners"].mean(axis=0)
+        normals[way_id] = tl["facing_axis"]
+
+    cos_limit = np.cos(np.radians(min_normal_angle_deg))
+    candidates = []
+    for a, b in itertools.combinations(sorted(centres), 2):
+        ca, cb = centres[a], centres[b]
+        distance = float(np.linalg.norm(ca[:2] - cb[:2]))
+        if distance > max_distance or abs(float(ca[2] - cb[2])) > max_height_diff:
+            continue
+        if float(np.dot(normals[a], normals[b])) > cos_limit:
+            continue                      # not opposed enough to be one mast
+        candidates.append((distance, a, b))
+
+    pairs: dict[str, str] = {}
+    for _, a, b in sorted(candidates):
+        if a in pairs or b in pairs:
+            continue
+        pairs[a], pairs[b] = b, a
+    return pairs
+
+
 # Way types worth drawing as road context. Lane boundaries are skipped: the
 # lanelet polygons below already cover them, and drawing both is unreadable.
 CONTEXT_WAY_TYPES = ("intersection_area", "crosswalk_polygon", "stop_line")

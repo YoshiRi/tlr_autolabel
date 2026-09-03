@@ -50,11 +50,16 @@ mapから解決する。`traffic_signal_2d_ann.json` 自体は標準t4dataset B/
 | `facing` | text | `front` `back` / 導出値(未マッチは空) | しない | 灯器面の向き(linestring方向-90°回転の法線、本地図で実証済み)。`back` は筐体裏面の検出 — colored stateなら誤対応疑い |
 | `raw_state` | text | autolabelの元state | しない | 検出器の原文。人手修正後も不変(diff用) |
 | `detector_score` | text | 検出スコア / 空(手動box) | しない | provenance |
+| `state_score` | text | 状態の確信度 / 空 | しない | **`detector_score` とは別物**。`detector_score`=「ここに灯器がある」(前段detector)、`state_score`=「その状態はこれ」(灯の分類器)。空=灯が読めなかった。2段構成の生成器は両者を独立に出すので、灯器としては確実だが状態が読めない検出は `detector_score` が高く `state_score` が空になる。`--min-state-score` の判定対象 |
 | `source_type` | select | `manual` `projected_map` `auto` `tracked` `propagated` `interpolated` `map_presence` / CVAT新規box=`manual`(先頭)、通常検出は `auto`、low再捕捉は `tracked` | しない | 由来の区別 |
 | `temporal_source` | select | `observed` `propagated` `map_presence` / 旧runは空 | しない | 評価用の大分類。実検出=observed、TTL伝播=propagated、地図のみ補完=map_presence |
 | `track_id` | text | L3 temporal trackingのtrack id / 空 | しない | 同一map wayの時系列track識別子 |
 | `tracking_status` | text | `observed` `lost` など / 空 | しない | tracking時の状態 |
 | `tracking_lost_frames` | text | lost継続frame数 / 空 | しない | TTLデバッグ用 |
+| `box_level` | select | `housing` `lamp` / `housing` | しない | **box2dが何を囲んでいるか**。`housing`=灯器筐体（Autoware/T4の契約。1筐体1boxで状態は灯リスト）。`lamp`=L1が点灯中の1灯だけをboxにした（CoMLOps系検出器 / CoMET `--only-tlr`）。CVAT上で人が引いたboxは常に `housing`。L3は `lamp` のとき筐体投影の該当スロットと突き合わせる |
+| `source_track_id` | text | L1側の観測track id / 空 | しない | **地図なし**の上流track識別子(CoMET `--tlr-tracking` のinstance token)。L3の `track_id` とは別物 |
+| `source_track_name` | text | L1側のtrack表示名 / 空 | しない | 同上。CoMET `instance_name` |
+| `source_detection_id` | text | L1側の検出id / 空 | しない | 上流1検出への逆引きキー(CoMET `object_ann.token`、無ければ `signal_id`) |
 | `annotation_uid` | text | sidecar token | しない | 往復キー。空の新規boxはimportで採番 |
 | `map_candidate_id` | text | 最近傍候補way id / 空 | しない | 未マッチ検出の**軟対応**。誤対応の手掛かり(authoritativeな `map_traffic_light_id` は空のまま) |
 | `regulatory_element_id_candidate` | text | 候補wayのRE / 空 | しない | 同上。未マッチでもRE情報を残す |

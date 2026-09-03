@@ -34,12 +34,23 @@ LABEL_ATTRS = [
     ("facing", "text", "", False),
     ("raw_state", "text", "", False),
     ("detector_score", "text", "", False),
+    # state confidence, distinct from detector_score above: the latter says a
+    # signal is here, this says how sure its state is (empty = unread)
+    ("state_score", "text", "", False),
     ("source_type", "select",
      "manual\nprojected_map\nauto\ntracked\npropagated\ninterpolated\nmap_presence", False),
+    # what the box outlines. housing is the contract (Autoware/T4 keep one box
+    # per housing with a lamp list); lamp means the L1 boxed a single lit lamp.
+    ("box_level", "select", "housing\nlamp", False),
     ("temporal_source", "select", "observed\npropagated\nmap_presence", False),
     ("track_id", "text", "", False),
     ("tracking_status", "text", "", False),
     ("tracking_lost_frames", "text", "", False),
+    # upstream L1 observation identity (e.g. CoMET's map-free 2D track);
+    # distinct from the map-assisted track_id above
+    ("source_track_id", "text", "", False),
+    ("source_track_name", "text", "", False),
+    ("source_detection_id", "text", "", False),
     ("annotation_uid", "text", "", False),
     # soft association kept for unmatched detections (info not lost)
     ("map_candidate_id", "text", "", False),

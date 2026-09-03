@@ -541,6 +541,81 @@ uses it as a classifier. Its internal lamp detections are decoded only into
 `lamps[].label/color/shape/arrow/confidence` and the rolled-up `state`;
 `signals[].box_xyxy` remains the upstream detector ROI.
 
+#### `box_level` — what `box_xyxy` outlines (additive, 2026-08-31)
+
+One box per **housing**, state as its lamp list, is the contract. That is how
+Autoware represents a traffic light ({color, shape, status} per lamp on one
+signal) and what the official T4 dataset stores, and it is what the L1 pipeline
+above produces: the detector finds the housing (`det_classes: TRAFFIC_LIGHT`
+for the CoMLOps detector), the lamp recognizer only assigns state.
+
+Not every producer works that way. CoMLOps-style lamp detectors, and CoMET's
+`--only-tlr`, emit one detection per **lit lamp** and no housing box at all.
+Until this field existed nothing in the schema said which one `box_xyxy` was,
+so L3 compared a lamp against the map's housing projection and scored a correct
+pairing near IoU 0 — silently, as a low match rate:
+
+| L1 boxes | matched | excl. stateless | IoU |
+|---|---|---|---|
+| lamp, undeclared | 282/1287 = 21.9% | — | 0.108 |
+| lamp, declared + lamp-level matching | 786/1287 = 61.1% | — | 0.000 |
+| housing (native detector) | 820/1562 = 52.5% | 820/1305 = 62.8% | 0.338 |
+| housing (CoMET, keeping the front-stage box) | 892/1410 = 63.3% | 892/1305 = 68.4% | 0.317 |
+
+(668-frame Komatsu run, same map and calibration throughout. "Stateless" are
+detections of a housing whose lamps could not be read — a lamp-level producer
+never emits those, so the middle column is the like-for-like figure.)
+
+Two things to read out of that. First, declaring `box_level` recovers most of
+the loss without touching the producer: red-circle goes 0/483 → 483/483, since
+red is the rightmost lamp in a JP horizontal signal and so fell outside the
+projected housing entirely. But it matches purely on distance-to-slot — IoU
+stays 0 — so it is a workaround, for producers that cannot emit a housing.
+Second, a real housing box is better on every axis: IoU comes back (0.317),
+`geometry_mismatch` drops 798 → 138, and pedestrians, which the lamp-level mode
+never fixed, go 0/215 → 84/215.
+
+```jsonc
+{
+  "box_level": "lamp",        // payload-level default for its signals
+  "signals": [
+    {
+      "box_level": "lamp",              // optional per-signal override
+      "box_xyxy": [1830, 1010, 1870, 1047],   // ONE lamp, not the housing
+      "state": "red-circle",
+      // optional: name the parent housing and the lamps fold into one
+      // housing-level signal, each keeping its own box under lamps[].box_xyxy
+      "housing_id": "h1",
+      "housing_box_xyxy": [1700, 1000, 1890, 1070],
+      "housing_score": 0.95
+    }
+  ]
+}
+```
+
+- Absent → `housing`, so every sidecar written before this field keeps its
+  meaning. `red_circle`-style underscore category names parse as canonical
+  state tokens, so a lamp-level producer needs no vocabulary of its own.
+- Lamp-level signals that name a parent (`housing_id`, `housing_box_xyxy`) are
+  folded into one housing-level signal by `tlr_autolabel/core/l1_ingest.py`.
+  With no housing box reported, the lamps' union stands in and the result is
+  marked `housing_box_source: "lamp_union"`.
+- Lamp-level signals with no parent stay lamp-level, and L3 matches them
+  against the slot inside the projected housing where that lamp belongs
+  (`tlr_autolabel/map/lamp_geometry.py`); `--lamp-level-matching off` restores
+  the whole-projection comparison for A/B. The gate always stays on the full
+  projection, because the projection itself can be laterally off by about a
+  slot width (~0.36 of the housing width on that run, uniform across ways).
+- The resolved level is written to each A' row as `attributes.box_level`, so a
+  reviewer can see whether a box is a housing or a single lamp.
+
+Producing housing boxes upstream is still better than relying on this: the
+housing box is what review, CVAT round-trips and T4 export all want. CoMET now
+does — `--only-tlr` keeps the front-stage `traffic_light` box and links each
+lamp to it with `parent_object_ann_token`, so its adapter emits housing-level
+signals with the lamps as `lamps[]`. Lamp-level stays supported for producers
+that only detect lamps.
+
 ### Signal state spec
 
 Each detected signal carries a canonical `state` string built from its
@@ -593,6 +668,36 @@ python3 deprecated/export_awml.py <labels_dir> --t4-dataset <src_dataset> --out 
 - The CVAT task must define label `traffic_light` with text attributes `state`
   and `confidence` for the XML to import cleanly. CVAT can also import the COCO
   file (it reads the `attributes` dict), so either path works.
+
+### Back-to-back map pairs
+
+Two vehicle signals bolted back to back on one mast are two separate lanelet2
+ways whose face normals point opposite ways. That is correct mapping, not a
+winding error -- but they sit under a metre apart, project to nearly the same
+box, and geometry has no reason to prefer either. On the Odaiba rinkai map: 33
+such pairs among 410 ways, median separation 0.89 m, all `red_yellow_green`.
+
+Every "colored state on a back face" flag in three recordings there (222 of
+them) turned out to be the back member of one of these pairs. The tell is that
+a readable colour cannot be the back of a housing -- you cannot see a lamp
+through it -- and that is knowledge no box overlap contains.
+
+`--back-to-back-penalty` (default 1.0, 0 disables) adds that to the assignment
+cost: a detection whose state was read pays the penalty for the back member of
+a pair, **but only when the front partner is also among that frame's
+candidates**. So a match is re-routed, never lost -- measured across the three
+recordings, `matched` and the stated/unknown split did not move by a single
+detection while the flags went 222 -> 21 (the 21 are one pedestrian way with no
+partner, a separate question).
+
+```bash
+python3 scripts/match_traffic_lights.py --dataset-root <ds>                          # on
+python3 scripts/match_traffic_lights.py --dataset-root <ds> --back-to-back-penalty 0 # off, for A/B
+```
+
+The pairing itself is `find_back_to_back_pairs()` in `tlr_autolabel/map/lanelet2.py`
+(within 3 m, height within 1.5 m, normals over 135 deg apart; closest-first so a
+way joins at most one pair and three ways on one mast cannot chain).
 
 ### Map enrichment & RE fusion (L3)
 
