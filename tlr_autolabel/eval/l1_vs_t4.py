@@ -25,6 +25,7 @@ from collections import Counter, defaultdict
 from pathlib import Path
 
 from tlr_autolabel.core.state_tokens import elements_key, parse_state
+from tlr_autolabel.t4.convert import db_tlr_to_elements, load_vocab
 
 
 def iou(a: list[float], b: list[float]) -> float:
@@ -46,36 +47,17 @@ def canonical_state(raw: str) -> str:
 def db_tlr_to_canonical(name: str) -> str:
     """Convert a db_tlr category name to the canonical state string.
 
-    db_tlr encodes vehicle states as a category name. Underscore names are the
-    current style (`red_straight_left`); hyphen names appear in older mappings.
+    Decoding lives in one place -- t4.convert.db_tlr_to_elements -- because this
+    function used to carry a second copy that gave the arrow the *circle's*
+    colour. On a dataset whose GT is `red_right` that read as a red right-arrow
+    while the model reported the green one that is actually lit, and 93 of 457
+    matched boxes were scored wrong for it. The JP arrow panel is green, and
+    db_tlr stores no arrow colour at all -- db_tlr_state() drops it on the way
+    out, so green is also the only choice that round-trips.
     """
-    if name in {"unknown", "", None}:
-        return "unknown"
-    if name == "crosswalk_red":
-        return "red-ped"
-    if name == "crosswalk_green":
-        return "green-ped"
-    if name == "crosswalk_unknown":
-        return "unknown"
-
-    tokens = name.replace("-", "_").split("_")
-    colors = {"red", "green", "yellow"}
-    arrows = {
-        "straight": "up",
-        "left": "left",
-        "right": "right",
-        "leftdiagonal": "up_left",
-        "rightdiagonal": "up_right",
-    }
-    color = next((t for t in tokens if t in colors), None)
-    if not color:
-        return "unknown"
-    canonical_color = "amber" if color == "yellow" else color
-    elements = [{"color": canonical_color, "shape": "circle", "arrow": None}]
-    for token in tokens:
-        if token in arrows:
-            elements.append({"color": canonical_color, "shape": "arrow", "arrow": arrows[token]})
-    return elements_key(elements)
+    # `or "unknown"` keeps the original contract: an unreadable or absent
+    # category is the string "unknown", not the empty string.
+    return elements_key(db_tlr_to_elements(name, load_vocab())) or "unknown"
 
 
 def signal_kind(state: str) -> str:

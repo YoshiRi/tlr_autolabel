@@ -41,6 +41,7 @@ import argparse
 import glob
 import json
 import os
+import re
 from pathlib import Path
 
 import numpy as np
@@ -130,6 +131,50 @@ def db_tlr_state(elements, vocab):
         return "unknown"
     name = "_".join(parts)
     return name if name in vocab["allowed"] else "unknown"
+
+
+def db_tlr_to_elements(name, vocab):
+    """db_tlr category name -> canonical lamp elements. Inverse of db_tlr_state.
+
+    Needed to read a human-annotated dataset back in: db_tlr carries the state
+    as the per-box category name, and the rest of this repo works in canonical
+    elements. Lossy in one direction only -- db_tlr does not record the arrow
+    colour, so arrows decode as green, which is the JP convention and what
+    db_tlr_state() assumed when it dropped the colour on the way out.
+
+    The vocabulary carries two spellings: 19 underscore names built colour-first
+    (`red_straight_left`) and 8 legacy hyphen names built arrow-first
+    (`left-red`, `right-yellow`, `leftdiagonal-red`). Both are accepted -- the
+    parts are collected as a set, so order carries no meaning either way.
+
+    Returns [] for `unknown` and for anything outside the vocabulary, which is
+    the same thing parse_state() does with an unreadable token.
+    """
+    name = (name or "").strip()
+    if not name or name == "unknown":
+        return []
+    ped = {"crosswalk_red": "red", "crosswalk_green": "green"}
+    if name in ped:
+        return [{"color": ped[name], "shape": "ped", "arrow": None}]
+    if name == "crosswalk_unknown":
+        return []
+    colors = {v: k for k, v in vocab["color_names"].items()}          # yellow -> amber
+    arrows = {}
+    for canonical, db in vocab["arrow_names"].items():
+        arrows.setdefault(db, canonical)                              # straight -> up
+    elements, seen = [], set()
+    for part in re.split(r"[_-]", name):
+        if part in colors:
+            key = (colors[part], "circle", None)
+        elif part in arrows:
+            key = ("green", "arrow", arrows[part])
+        else:
+            return []                                                 # not this vocabulary
+        if key in seen:
+            continue
+        seen.add(key)
+        elements.append({"color": key[0], "shape": key[1], "arrow": key[2]})
+    return elements
 
 
 def load_records(args):

@@ -254,8 +254,16 @@ def parse_args():
     parser.add_argument("--report", default=None, type=Path,
                         help="Diagnostics path (default: build/tl_match/match_report.json; "
                              "not written when --frames is used unless given explicitly).")
-    parser.add_argument("--max-distance", default=200.0, type=float,
-                        help="Max ego-to-signal distance for a map candidate to be projected.")
+    parser.add_argument("--max-distance", default=150.0, type=float,
+                        help="Max ego-to-signal distance for a map candidate to be "
+                             "projected. Beyond roughly this the projection and the "
+                             "box are both a couple of dozen pixels across, so a "
+                             "match says the signal is present but carries no useful "
+                             "position: measured against human GT, raising it from "
+                             "200 to 300 added 70 matches whose boxes were 22px wide "
+                             "and pushed the share of matched pairs with IoU under "
+                             "0.05 from 25% to 38%. Raise it when RE presence over "
+                             "time matters more than where the box sits.")
     parser.add_argument("--max-incidence-deg", default=85.0, type=float,
                         help="Drop map candidates seen closer to edge-on than this "
                              "(unsigned face-normal vs sight-line angle). 85 keeps "
