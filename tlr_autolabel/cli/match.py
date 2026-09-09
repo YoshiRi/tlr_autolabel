@@ -21,6 +21,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import statistics
 import re
 from collections import defaultdict
 from pathlib import Path
@@ -59,10 +60,21 @@ from tlr_autolabel.map.projection import (
     quat_to_rot,
 )
 from tlr_autolabel.t4.index import load_t4_index
+from tlr_autolabel.map.registration import apply_shift, estimate_frame_shift
 from tlr_autolabel.tracking.inputs import collect_low_tracking_candidates, detector_score
 
 
 # ---------------------------------------------------------------- state labels
+
+
+
+def _pct(values, q):
+    """q-th percentile by nearest rank; the run summary only needs a spread."""
+    ordered = sorted(values)
+    if not ordered:
+        return 0.0
+    k = min(len(ordered) - 1, max(0, int(round(q / 100.0 * (len(ordered) - 1)))))
+    return ordered[k]
 
 
 def raw_state(signal_entry) -> str:
@@ -290,6 +302,18 @@ def parse_args():
                              "any in-gate distance match.")
     parser.add_argument("--min-score", default=0.5, type=float,
                         help="Ignore detections below this detector_score.")
+    parser.add_argument("--projection-offset", choices=["off", "estimated"],
+                        default="estimated",
+                        help="'estimated' removes the map projection's "
+                             "per-frame 2D offset before association, using "
+                             "this frame's stated detections as anchors. "
+                             "Measured on 2821adc7: association IoU median "
+                             "0.362 -> 0.707, centre residual 32.0 -> 6.0 px. "
+                             "'off' is the pre-registration behaviour.")
+    parser.add_argument("--projection-offset-gate", default=6.0, type=float,
+                        help="anchor gate for the shift estimate, in multiples "
+                             "of the larger box width. Must be loose enough to "
+                             "admit the offset it is measuring.")
     parser.add_argument("--back-to-back-penalty", default=1.0, type=float,
                         help="Cost added when a detection with a readable colour "
                              "would be assigned to the back face of a signal whose "
@@ -515,6 +539,10 @@ def main():
     report_frames = []
     vis_left = args.vis
     stats = defaultdict(int)
+    # last known projection shift per channel, and the run's distribution
+    last_shift: dict[str, tuple[float, float, int]] = {}
+    shift_dx: list[float] = []
+    shift_dy: list[float] = []
     # per (channel, way_id) timeline for gap filling: every frame the way is
     # in view (a projected candidate), with the matched state if any.
     way_track: dict[tuple[str, str], list[dict]] = defaultdict(list)
@@ -556,6 +584,32 @@ def main():
         image_wh = (payload.get("width", 2880), payload.get("height", 1860))
 
         candidates = map_projector.project(frame, image_wh)
+
+        if args.projection_offset == "estimated":
+            # Only a detection whose state was read may anchor the shift: one
+            # with no readable state is usually a housing's back face, and its
+            # nearest map way belongs to a different signal.
+            anchors = [d["box_xyxy"] for d in detections
+                       if d.get("box_xyxy")
+                       and not d.get(STATE_SUPPRESSED)
+                       and canonical_state(d) != "unknown"]
+            shift = estimate_frame_shift(
+                anchors, candidates, gate_factor=args.projection_offset_gate)
+            if shift is None:
+                # anchor availability is intermittent while the offset is
+                # continuous in ego motion, so hold the last known shift
+                shift = last_shift.get(frame["channel"])
+                if shift is not None:
+                    stats["projection_shift_carried"] += 1
+            else:
+                last_shift[frame["channel"]] = shift
+                stats["projection_shift_estimated"] += 1
+                shift_dx.append(shift[0])
+                shift_dy.append(shift[1])
+            if shift is not None:
+                candidates = apply_shift(candidates, shift[0], shift[1])
+            else:
+                stats["projection_shift_unavailable"] += 1
 
         in_view = {c["way_id"] for c in candidates}
 
@@ -983,7 +1037,18 @@ def main():
                          "min_state_score": args.min_state_score,
                          "back_to_back_penalty": args.back_to_back_penalty,
                          "back_to_back_pairs": len(back_to_back) // 2,
-                         "lamp_level_matching": args.lamp_level_matching}
+                         "lamp_level_matching": args.lamp_level_matching,
+                         "projection_offset": args.projection_offset}
+        if shift_dx:
+            report_params["projection_shift_px"] = {
+                "n_frames": len(shift_dx),
+                "dx_median": round(statistics.median(shift_dx), 1),
+                "dy_median": round(statistics.median(shift_dy), 1),
+                "dx_p10": round(_pct(shift_dx, 10), 1),
+                "dx_p90": round(_pct(shift_dx, 90), 1),
+                "dy_p10": round(_pct(shift_dy, 10), 1),
+                "dy_p90": round(_pct(shift_dy, 90), 1),
+            }
         if tracking_cfg.enabled:
             report_params["temporal_tracking"] = tracking_cfg.__dict__
         report_path.write_text(json.dumps(
@@ -999,6 +1064,14 @@ def main():
               f"({100.0 * stats['matched_stated'] / max(stated, 1):.1f}%)   "
               f"state unknown: {stats['matched_state_unknown']}/{unknown} "
               f"({100.0 * stats['matched_state_unknown'] / max(unknown, 1):.1f}%)")
+    if shift_dx:
+        print(f"  projection offset removed on {len(shift_dx)} frames "
+              f"(dx median {statistics.median(shift_dx):+.1f} px, "
+              f"dy median {statistics.median(shift_dy):+.1f} px"
+              + (f", carried {stats['projection_shift_carried']}"
+                 if stats["projection_shift_carried"] else "")
+              + (f", unavailable {stats['projection_shift_unavailable']}"
+                 if stats["projection_shift_unavailable"] else "") + ")")
     if stats["back_face_penalty_applied"]:
         print(f"  back-face penalty applied to {stats['back_face_penalty_applied']} pairings")
     if stats["state_suppressed"]:

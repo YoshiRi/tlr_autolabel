@@ -159,8 +159,9 @@ def div(num: int, den: int):
     return round(num / den, 4) if den else None
 
 
-def evaluate(gt_by_frame: dict[str, list[dict]], pred_by_frame: dict[str, list[dict]], iou_thr: float):
-    det = {"tp": 0, "fp": 0, "fn": 0, "iou": []}
+def evaluate(gt_by_frame: dict[str, list[dict]], pred_by_frame: dict[str, list[dict]],
+             iou_thr: float, score_stateless_as_fp: bool = False):
+    det = {"tp": 0, "fp": 0, "fn": 0, "not_evaluated": 0, "iou": []}
     cls = {"n": 0, "exact": 0, "known_n": 0, "known_exact": 0, "elem_tp": 0, "elem_fp": 0, "elem_fn": 0}
     by_kind = defaultdict(lambda: {"tp": 0, "fp": 0, "fn": 0, "cls_n": 0, "cls_exact": 0})
     by_category = defaultdict(lambda: {"gt": 0, "tp": 0, "fn": 0, "cls_n": 0, "cls_exact": 0})
@@ -169,6 +170,7 @@ def evaluate(gt_by_frame: dict[str, list[dict]], pred_by_frame: dict[str, list[d
     matches_out = []
     gt_misses = []
     pred_false_positives = []
+    pred_not_evaluated = []
 
     for token in sorted(set(gt_by_frame) | set(pred_by_frame)):
         gt = gt_by_frame.get(token, [])
@@ -229,25 +231,41 @@ def evaluate(gt_by_frame: dict[str, list[dict]], pred_by_frame: dict[str, list[d
 
         for pi in pred_unmatched:
             p = pred[pi]
-            det["fp"] += 1
-            by_kind[p["signal_kind"]]["fp"] += 1
-            pred_fp_state[p["state"]] += 1
-            pred_false_positives.append({
+            row = {
                 "sample_data_token": token,
                 "filename": p.get("filename"),
                 "pred_box": p["box"],
                 "pred_state": p["state"],
                 "pred_score": p.get("detector_score"),
-            })
+            }
+            if score_stateless_as_fp or p["state"] != "unknown":
+                det["fp"] += 1
+                by_kind[p["signal_kind"]]["fp"] += 1
+                pred_fp_state[p["state"]] += 1
+                pred_false_positives.append(row)
+            else:
+                # Out of scope, not a mistake: GT does not annotate the back of
+                # a housing, because a face with no lamp has no state to
+                # evaluate. A detection with no readable state is that back
+                # face in the large majority of cases -- on 2821adc7, 202 of
+                # 236 unmatched detections, and every one of the three samples
+                # inspected by eye was a back plate. Counting them as FP put
+                # precision at 0.660 while the model and the annotator actually
+                # agreed. They are kept here so the exclusion stays auditable.
+                det["not_evaluated"] += 1
+                pred_not_evaluated.append(row)
 
     ious = sorted(det["iou"])
     overall = {
         "tp": det["tp"],
         "fp": det["fp"],
         "fn": det["fn"],
+        "not_evaluated": det["not_evaluated"],
         "precision": div(det["tp"], det["tp"] + det["fp"]),
         "recall": div(det["tp"], det["tp"] + det["fn"]),
         "f1": div(2 * det["tp"], 2 * det["tp"] + det["fp"] + det["fn"]),
+        "precision_counting_stateless_as_fp": div(
+            det["tp"], det["tp"] + det["fp"] + det["not_evaluated"]),
         "iou_mean": round(sum(ious) / len(ious), 4) if ious else None,
         "iou_median": round(ious[len(ious) // 2], 4) if ious else None,
     }
@@ -291,6 +309,7 @@ def evaluate(gt_by_frame: dict[str, list[dict]], pred_by_frame: dict[str, list[d
         "matches": matches_out,
         "gt_misses": gt_misses,
         "pred_false_positives": pred_false_positives,
+        "pred_not_evaluated": pred_not_evaluated,
     }
 
 
@@ -306,6 +325,7 @@ def write_markdown(report: dict, path: Path):
         "|---|---:|",
         f"| TP | {det['tp']} |",
         f"| FP | {det['fp']} |",
+        f"| 評価対象外 (状態なし・未マッチ) | {det.get('not_evaluated', 0)} |",
         f"| FN | {det['fn']} |",
         f"| precision | {det['precision']} |",
         f"| recall | {det['recall']} |",
@@ -351,19 +371,28 @@ def main():
     parser.add_argument("--iou", default=0.3, type=float)
     parser.add_argument("--min-score", default=0.0, type=float,
                         help="Ignore L1 predictions below this detector_score.")
+    parser.add_argument("--score-stateless-as-fp", action="store_true",
+                        help="Count an unmatched detection with no readable "
+                             "state as a false positive. Off by default: GT "
+                             "does not annotate a housing's back face, so a "
+                             "detection with no state has nothing to be "
+                             "scored against. Turn this on to reproduce "
+                             "pre-decision numbers.")
     parser.add_argument("--output", default=Path("build/tl_eval/l1_vs_t4_gt.json"), type=Path)
     parser.add_argument("--markdown", default=Path("build/tl_eval/l1_vs_t4_gt.md"), type=Path)
     args = parser.parse_args()
 
     gt_rows, gt_by_frame = load_t4_gt(args.dataset_root)
     pred_rows, pred_by_frame, skipped_no_token = load_l1_predictions(args.pred_dir, args.min_score)
-    report = evaluate(gt_by_frame, pred_by_frame, args.iou)
+    report = evaluate(gt_by_frame, pred_by_frame, args.iou,
+                      score_stateless_as_fp=args.score_stateless_as_fp)
     report = {
         "schema_version": "tlr_l1_vs_t4_gt/v1",
         "dataset_root": str(args.dataset_root),
         "pred_dir": str(args.pred_dir),
         "iou_threshold": args.iou,
         "min_score": args.min_score,
+        "score_stateless_as_fp": args.score_stateless_as_fp,
         "inputs": {
             "gt_boxes": len(gt_rows),
             "gt_frames": len(gt_by_frame),
@@ -385,7 +414,9 @@ def main():
     cls = report["classification"]
     print(
         f"detection: P={det['precision']} R={det['recall']} F1={det['f1']} "
-        f"(tp={det['tp']} fp={det['fp']} fn={det['fn']}) @IoU>={args.iou}"
+        f"(tp={det['tp']} fp={det['fp']} fn={det['fn']}"
+        + (f" not-evaluated={det['not_evaluated']}" if det.get("not_evaluated") else "")
+        + f") @IoU>={args.iou}"
     )
     print(
         f"classification: state_acc={cls['state_accuracy']} "
