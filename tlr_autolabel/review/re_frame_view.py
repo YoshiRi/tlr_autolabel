@@ -50,6 +50,11 @@ def annotation_view(ann: dict) -> dict:
         "re": re_id,
         "cand": attrs.get("map_candidate_id", "") or "",
         "reason": attrs.get("unmatched_reason", "") or "",
+        # upstream (map-free) L1 track vs. the map-assisted L3 track: shown
+        # separately so a run of unmatched boxes can be traced to one source
+        # track instead of looking like unrelated one-off detections.
+        "src_track": attrs.get("source_track_id", "") or "",
+        "track": attrs.get("track_id", "") or "",
         # Matched == the timeline review can reach it. Everything else is
         # only reviewable here, which is the reason this view exists.
         "matched": bool(way or re_id),
@@ -484,6 +489,9 @@ function cropCard(ann) {
   const rows = [`kind=${ann.kind || '-'} score=${ann.score}`,
                 `vis=${ann.vis || '-'} status=${ann.status || '-'}`];
   if (ann.raw_state && ann.raw_state !== ann.state) rows.push(`raw=${ann.raw_state}`);
+  if (ann.src_track || ann.track) {
+    rows.push(`src_track=${escapeHtml(ann.src_track || '-')} track=${escapeHtml(ann.track || '-')}`);
+  }
   if (ann.matched) {
     rows.push(`way=${ann.way || '-'} re=${ann.re || '-'}`);
   } else {

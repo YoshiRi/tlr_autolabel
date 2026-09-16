@@ -21,12 +21,20 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import statistics
 import re
 from collections import defaultdict
 from pathlib import Path
 
 import numpy as np
 
+from tlr_autolabel.core.l1_ingest import (
+    BOX_LEVEL_HOUSING,
+    BOX_LEVEL_LAMP,
+    count_by_level,
+)
+from tlr_autolabel.core.l1_ingest import signals as normalized_signals
+from tlr_autolabel.core.l1_ingest import state_score as l1_state_score
 from tlr_autolabel.core.state_tokens import elements_key, parse_state
 from tlr_autolabel.tracking.temporal import TemporalAssociator, TemporalTrackingConfig
 from tlr_autolabel.map.association import (
@@ -37,9 +45,14 @@ from tlr_autolabel.map.association import (
     match_boxes,
     match_boxes_legacy,
     match_boxes_staged,
+    target_box,
     unmatched_reason,
 )
-from tlr_autolabel.map.lanelet2 import load_lanelet2_traffic_lights
+from tlr_autolabel.map.lamp_geometry import expected_lamp_box
+from tlr_autolabel.map.lanelet2 import (
+    find_back_to_back_pairs,
+    load_lanelet2_traffic_lights,
+)
 from tlr_autolabel.map.projection import (
     MapProjector,
     project_traffic_lights,
@@ -47,10 +60,21 @@ from tlr_autolabel.map.projection import (
     quat_to_rot,
 )
 from tlr_autolabel.t4.index import load_t4_index
+from tlr_autolabel.map.registration import apply_shift, estimate_frame_shift
 from tlr_autolabel.tracking.inputs import collect_low_tracking_candidates, detector_score
 
 
 # ---------------------------------------------------------------- state labels
+
+
+
+def _pct(values, q):
+    """q-th percentile by nearest rank; the run summary only needs a spread."""
+    ordered = sorted(values)
+    if not ordered:
+        return 0.0
+    k = min(len(ordered) - 1, max(0, int(round(q / 100.0 * (len(ordered) - 1)))))
+    return ordered[k]
 
 
 def raw_state(signal_entry) -> str:
@@ -60,14 +84,69 @@ def raw_state(signal_entry) -> str:
 
 def canonical_state(signal_entry) -> str:
     """Canonical normalized state: parse (handles legacy tokens too) and
-    re-serialize sorted; 'unknown' when no lamp carries state."""
+    re-serialize sorted; 'unknown' when no lamp carries state.
+
+    A detection whose state confidence fell under --min-state-score is marked
+    at selection time and reads as `unknown` here. `raw_state()` still reports
+    what the detector said, so nothing is lost -- the box and the original
+    string stay for review, only the asserted state is withdrawn."""
+    if signal_entry.get(STATE_SUPPRESSED):
+        return "unknown"
     return elements_key(parse_state(raw_state(signal_entry))) or "unknown"
+
+
+STATE_SUPPRESSED = "_state_score_below_threshold"
+
+
+def format_score(value) -> str:
+    return "" if value is None else f"{value}"
 
 
 def signal_kind(elements: list[dict]) -> str:
     if any(e["shape"] == "ped" for e in elements):
         return "pedestrian"
     return "vehicle" if elements else "unknown"
+
+
+def lamp_target_box(det, cand):
+    """Match a lamp-level detection against the slot inside the projected
+    housing where its lamp belongs; None (full projection) for everything else.
+    """
+    if det.get("box_level", BOX_LEVEL_HOUSING) != BOX_LEVEL_LAMP:
+        return None
+    return expected_lamp_box(cand, parse_state(raw_state(det)))
+
+
+# --------------------------------------------------------- L1 provenance
+
+# An upstream L1 producer may carry its own observation identity: CoMET's
+# `--only-tlr --tlr-tracking` writes a map-free 2D track as the object_ann
+# instance, and the adapter passes it down as source_instance_token/_name.
+# That is NOT the L3 `track_id` written below (which is map-assisted and only
+# exists with --temporal-tracking), so it is kept under separate source_* keys
+# and always emitted -- empty when L1 has none -- to keep the A' row shape fixed.
+SOURCE_PROVENANCE_KEYS = (
+    "source_track_id", "source_track_name", "source_detection_id",
+)
+
+
+def source_provenance(signal_entry) -> dict:
+    """L1 observation identity carried through to A', as strings."""
+    entry = signal_entry or {}
+
+    def first(*keys) -> str:
+        for key in keys:
+            value = entry.get(key)
+            if value not in (None, ""):
+                return str(value)
+        return ""
+
+    return {
+        "source_track_id": first("source_track_id", "source_instance_token"),
+        "source_track_name": first("source_track_name", "source_instance_name"),
+        "source_detection_id": first("source_detection_id",
+                                     "source_object_ann_token", "signal_id"),
+    }
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -187,8 +266,16 @@ def parse_args():
     parser.add_argument("--report", default=None, type=Path,
                         help="Diagnostics path (default: build/tl_match/match_report.json; "
                              "not written when --frames is used unless given explicitly).")
-    parser.add_argument("--max-distance", default=200.0, type=float,
-                        help="Max ego-to-signal distance for a map candidate to be projected.")
+    parser.add_argument("--max-distance", default=150.0, type=float,
+                        help="Max ego-to-signal distance for a map candidate to be "
+                             "projected. Beyond roughly this the projection and the "
+                             "box are both a couple of dozen pixels across, so a "
+                             "match says the signal is present but carries no useful "
+                             "position: measured against human GT, raising it from "
+                             "200 to 300 added 70 matches whose boxes were 22px wide "
+                             "and pushed the share of matched pairs with IoU under "
+                             "0.05 from 25% to 38%. Raise it when RE presence over "
+                             "time matters more than where the box sits.")
     parser.add_argument("--max-incidence-deg", default=85.0, type=float,
                         help="Drop map candidates seen closer to edge-on than this "
                              "(unsigned face-normal vs sight-line angle). 85 keeps "
@@ -215,6 +302,48 @@ def parse_args():
                              "any in-gate distance match.")
     parser.add_argument("--min-score", default=0.5, type=float,
                         help="Ignore detections below this detector_score.")
+    parser.add_argument("--projection-offset", choices=["off", "estimated"],
+                        default="estimated",
+                        help="'estimated' removes the map projection's "
+                             "per-frame 2D offset before association, using "
+                             "this frame's stated detections as anchors. "
+                             "Measured on 2821adc7: association IoU median "
+                             "0.362 -> 0.707, centre residual 32.0 -> 6.0 px. "
+                             "'off' is the pre-registration behaviour.")
+    parser.add_argument("--projection-offset-gate", default=6.0, type=float,
+                        help="anchor gate for the shift estimate, in multiples "
+                             "of the larger box width. Must be loose enough to "
+                             "admit the offset it is measuring.")
+    parser.add_argument("--back-to-back-penalty", default=1.0, type=float,
+                        help="Cost added when a detection with a readable colour "
+                             "would be assigned to the back face of a signal whose "
+                             "front face is also in view. Two signals bolted back "
+                             "to back on one mast are separate map ways under a "
+                             "metre apart, so they project to nearly the same box "
+                             "and geometry cannot choose; a readable lamp can only "
+                             "be the front one. Only applied when the front partner "
+                             "is among this frame's candidates, so a match is never "
+                             "lost, only re-routed. 0 disables.")
+    parser.add_argument("--min-state-score", default=0.0, type=float,
+                        help="Withdraw the asserted state of a detection whose "
+                             "state confidence is below this, keeping its box "
+                             "with state=unknown. Separate from --min-score, "
+                             "which gates on detector_score (does a signal exist "
+                             "here) -- a two-stage producer reports the two "
+                             "independently, and a housing it localized "
+                             "confidently but could not read has a high "
+                             "detector_score and no state at all. 0 disables; "
+                             "a detection with no state confidence at all is "
+                             "only affected when this is above 0.")
+    parser.add_argument("--lamp-level-matching", choices=["on", "off"], default="on",
+                        help="How to match a detection whose L1 declared "
+                             "box_level=lamp (a lit lamp, not the housing). "
+                             "on (default): compare it against the slot inside "
+                             "the projected housing where that lamp belongs. "
+                             "off: compare against the whole projection, which "
+                             "is what happened before box_level existed and "
+                             "scores a correct pairing near IoU 0. Has no "
+                             "effect on housing-level L1.")
     tracking_group = parser.add_mutually_exclusive_group()
     tracking_group.add_argument("--temporal-tracking", dest="temporal_tracking",
                                 action="store_true", default=False,
@@ -367,10 +496,13 @@ def main():
     root = args.dataset_root.resolve()
     args.dataset_root = root
     tracking_cfg = load_tracking_config(args)
+    target_box_fn = lamp_target_box if args.lamp_level_matching == "on" else None
     tracker = TemporalAssociator(tracking_cfg) if tracking_cfg.enabled else None
     channel_frame_numbers: dict[str, int] = defaultdict(int)
 
     traffic_lights, regulatory_by_way = load_lanelet2_traffic_lights(root / "map/lanelet2_map.osm")
+    back_to_back = (find_back_to_back_pairs(traffic_lights)
+                    if args.back_to_back_penalty > 0 else {})
     map_projector = MapProjector(
         traffic_lights,
         args.max_distance,
@@ -380,6 +512,9 @@ def main():
     frames, frames_by_token = load_t4_index(root)
     print(f"map traffic lights: {len(traffic_lights)}, "
           f"ways with regulatory element: {len(regulatory_by_way)}, camera frames: {len(frames)}")
+    if back_to_back:
+        print(f"back-to-back map pairs: {len(back_to_back) // 2} "
+              f"({len(back_to_back)} ways), penalty {args.back_to_back_penalty:g}")
     if tracking_cfg.enabled:
         print("temporal tracking: "
               f"low_score={tracking_cfg.low_score:g}, "
@@ -391,7 +526,11 @@ def main():
     files = sorted((root / args.autolabel_dir).rglob("*.json"))
     if args.frames:
         wanted = {s.strip() for s in args.frames.split(",") if s.strip()}
-        files = [f for f in files if f.stem in wanted]
+        # <CHANNEL>_<frame> is the flat-dir stem; in the per-channel layout the
+        # stem is just the frame number, so also accept the parent dir as the
+        # channel. Without this a bare "00034" cannot pick one camera.
+        files = [f for f in files
+                 if f.stem in wanted or f"{f.parent.name}_{f.stem}" in wanted]
         args.vis = max(args.vis, len(files))
     if args.limit > 0:
         files = files[: args.limit]
@@ -400,6 +539,10 @@ def main():
     report_frames = []
     vis_left = args.vis
     stats = defaultdict(int)
+    # last known projection shift per channel, and the run's distribution
+    last_shift: dict[str, tuple[float, float, int]] = {}
+    shift_dx: list[float] = []
+    shift_dy: list[float] = []
     # per (channel, way_id) timeline for gap filling: every frame the way is
     # in view (a projected candidate), with the matched state if any.
     way_track: dict[tuple[str, str], list[dict]] = defaultdict(list)
@@ -423,8 +566,17 @@ def main():
         channel_frame_numbers[frame["channel"]] += 1
         tracking_frame_number = channel_frame_numbers[frame["channel"]]
 
-        detections = [d for d in payload.get("signals", [])
+        frame_signals = normalized_signals(payload)
+        for level, n in count_by_level(frame_signals).items():
+            stats[f"l1_signals:{level}"] += n
+        detections = [d for d in frame_signals
                       if detector_score(d) >= args.min_score]
+        if args.min_state_score > 0:
+            for det in detections:
+                score = l1_state_score(det)
+                if score is None or score < args.min_state_score:
+                    det[STATE_SUPPRESSED] = True
+                    stats["state_suppressed"] += 1
         low_detections = (
             collect_low_tracking_candidates(payload, args.min_score, tracking_cfg.low_score)
             if tracking_cfg.enabled else []
@@ -432,6 +584,51 @@ def main():
         image_wh = (payload.get("width", 2880), payload.get("height", 1860))
 
         candidates = map_projector.project(frame, image_wh)
+
+        if args.projection_offset == "estimated":
+            # Only a detection whose state was read may anchor the shift: one
+            # with no readable state is usually a housing's back face, and its
+            # nearest map way belongs to a different signal.
+            anchors = [d["box_xyxy"] for d in detections
+                       if d.get("box_xyxy")
+                       and not d.get(STATE_SUPPRESSED)
+                       and canonical_state(d) != "unknown"]
+            shift = estimate_frame_shift(
+                anchors, candidates, gate_factor=args.projection_offset_gate)
+            if shift is None:
+                # anchor availability is intermittent while the offset is
+                # continuous in ego motion, so hold the last known shift
+                shift = last_shift.get(frame["channel"])
+                if shift is not None:
+                    stats["projection_shift_carried"] += 1
+            else:
+                last_shift[frame["channel"]] = shift
+                stats["projection_shift_estimated"] += 1
+                shift_dx.append(shift[0])
+                shift_dy.append(shift[1])
+            if shift is not None:
+                candidates = apply_shift(candidates, shift[0], shift[1])
+            else:
+                stats["projection_shift_unavailable"] += 1
+
+        in_view = {c["way_id"] for c in candidates}
+
+        def back_face_penalty(det, cand, _in_view=in_view):
+            """A readable colour cannot be the back of a housing. Push the back
+            member of a back-to-back pair aside, but only when its front partner
+            is also in view -- otherwise there is nowhere better to put the
+            detection and suppressing it would just lose the match."""
+            if cand.get("facing") != "back":
+                return 0.0
+            partner = back_to_back.get(cand["way_id"])
+            if partner is None or partner not in _in_view:
+                return 0.0
+            if canonical_state(det) == "unknown":
+                return 0.0
+            stats["back_face_penalty_applied"] += 1
+            return args.back_to_back_penalty
+
+        penalty_fn = back_face_penalty if back_to_back else None
         matches, match_stages = match_boxes(
             detections,
             candidates,
@@ -441,6 +638,8 @@ def main():
             relaxed_min_iou=args.relaxed_min_iou,
             relaxed_size_ratio=args.relaxed_size_ratio,
             relaxed_unmatch_cost=args.relaxed_unmatch_cost,
+            target_box_fn=target_box_fn,
+            penalty_fn=penalty_fn,
         )
         tracking_result = None
         tracked_low_matches = {}
@@ -459,6 +658,15 @@ def main():
 
         stats["frames"] += 1
         stats["detections"] += len(detections)
+        # A detection the producer localized but could not read is not the same
+        # thing as one whose state it asserted. Counting them in one denominator
+        # made the match rate unreadable: on the 2400-frame release_03 run,
+        # 11368 of 18772 housings had no readable lamp.
+        for det in detections:
+            if canonical_state(det) == "unknown":
+                stats["detections_state_unknown"] += 1
+            else:
+                stats["detections_stated"] += 1
         if tracking_cfg.enabled:
             stats["tracking_low_candidates"] += len(low_detections)
             stats["tracking_low_matched"] += len(tracked_low_matches)
@@ -466,9 +674,15 @@ def main():
         for i, det in enumerate(detections):
             if i not in matches:
                 stats["unmatched:" + unmatched_reason(
-                    det, canonical_state(det), candidates, matches, args.gate_factor)] += 1
+                    det, canonical_state(det), candidates, matches, args.gate_factor,
+                    target_box_fn=target_box_fn)] += 1
         stats["map_candidates"] += len(candidates)
         stats["matched"] += len(matches)
+        for i in matches:
+            if canonical_state(detections[i]) == "unknown":
+                stats["matched_state_unknown"] += 1
+            else:
+                stats["matched_stated"] += 1
         for stage in match_stages.values():
             stats["matched:" + stage] += 1
 
@@ -517,7 +731,8 @@ def main():
                                         match_stage=None, track=None,
                                         real_detection=True):
             reg_ids = regulatory_by_way.get(cand["way_id"], []) if cand else []
-            pair_iou = iou(det["box_xyxy"], cand["bbox"]) if cand else 0.0
+            pair_iou = iou(det["box_xyxy"],
+                           target_box(cand, det, target_box_fn)) if cand else 0.0
             # For an unmatched detection, keep the nearest in-view map candidate
             # as a *soft* association (its way + RE + why the match was rejected),
             # so the info isn't lost — a reviewer can promote it. The authoritative
@@ -525,15 +740,18 @@ def main():
             reason, cand_way, cand_re = "", "", ""
             if cand is None and candidates:
                 reason = unmatched_reason(det, canonical_state(det), candidates,
-                                          matches, args.gate_factor)
-                dists = [float(np.linalg.norm(center(det["box_xyxy"]) - center(c["bbox"])))
+                                          matches, args.gate_factor,
+                                          target_box_fn=target_box_fn)
+                dists = [float(np.linalg.norm(
+                    center(det["box_xyxy"]) - center(target_box(c, det, target_box_fn))))
                          for c in candidates]
                 nc = candidates[int(np.argmin(dists))]
                 cand_way = nc["way_id"]
                 cand_re = ",".join(regulatory_by_way.get(nc["way_id"], []))
             elif cand is None:
                 reason = unmatched_reason(det, canonical_state(det), candidates,
-                                          matches, args.gate_factor)
+                                          matches, args.gate_factor,
+                                          target_box_fn=target_box_fn)
             state = canonical_state(det) if real_detection else (det.get("state") or "unknown")
             raw = raw_state(det) if real_detection else ""
             if (
@@ -545,6 +763,11 @@ def main():
             ):
                 state = track.last_state
             score = det.get("detector_score") if real_detection else None
+            # localization confidence (detector_score) and state confidence are
+            # different numbers answering different questions; carry both so a
+            # reviewer and the eval layer can tell "a signal is here" from
+            # "and its state is this"
+            st_score = l1_state_score(det) if real_detection else None
             kind_elements = parse_state(raw)
             if not kind_elements:
                 kind_elements = parse_state(state)
@@ -562,8 +785,14 @@ def main():
                 "unmatched_reason": reason,
                 "facing": cand["facing"] if cand else "",
                 "raw_state": raw,
-                "detector_score": "" if score is None else f"{score}",
+                "detector_score": format_score(score),
+                "state_score": format_score(st_score),
                 "source_type": source_type,
+                # what box2d outlines: the housing, or a single lamp inside it
+                "box_level": (det.get("box_level", BOX_LEVEL_HOUSING)
+                              if real_detection else BOX_LEVEL_HOUSING),
+                # L1's own observation identity; empty on synthetic boxes.
+                **source_provenance(det if real_detection else None),
             }
             if tracking_cfg.enabled:
                 attrs.update({
@@ -598,6 +827,7 @@ def main():
                 {
                     "detection_box": det["box_xyxy"],
                     "detector_score": score,
+                    "state_score": st_score,
                     "signal": raw or state,
                     "map_traffic_light_id": cand["way_id"] if cand else None,
                     "map_subtype": cand["subtype"] if cand else None,
@@ -608,6 +838,9 @@ def main():
                     "match_stage": match_stage,
                     "source_type": source_type,
                     "track_id": track.track_id if track else None,
+                    "source_track_id": (
+                        source_provenance(det)["source_track_id"] if real_detection else ""
+                    ),
                     "unmatched_reason": None if cand else reason,
                 }
             )
@@ -676,8 +909,11 @@ def main():
             })
 
         if vis_left > 0 and detections:
+            stem = path.stem
+            if not stem.startswith(frame["channel"]):
+                stem = f"{frame['channel']}_{stem}"
             draw_overlay(root, frame, detections, candidates, matches,
-                         root / args.vis_dir / f"{path.stem}.jpg")
+                         root / args.vis_dir / f"{stem}.jpg")
             vis_left -= 1
 
     # ---- gap filling: bridge short detection dropouts of a regulatory element
@@ -740,7 +976,10 @@ def main():
                 "facing": e["facing"],
                 "raw_state": "",       # not a detection
                 "detector_score": "",
+                "state_score": "",
                 "source_type": source,
+                "box_level": BOX_LEVEL_HOUSING,   # a map projection, by construction
+                **source_provenance(None),
             }
             if tracking_cfg.enabled:
                 attrs.update({
@@ -794,7 +1033,22 @@ def main():
                          "relaxed_min_iou": args.relaxed_min_iou,
                          "relaxed_size_ratio": args.relaxed_size_ratio,
                          "relaxed_unmatch_cost": args.relaxed_unmatch_cost,
-                         "min_score": args.min_score}
+                         "min_score": args.min_score,
+                         "min_state_score": args.min_state_score,
+                         "back_to_back_penalty": args.back_to_back_penalty,
+                         "back_to_back_pairs": len(back_to_back) // 2,
+                         "lamp_level_matching": args.lamp_level_matching,
+                         "projection_offset": args.projection_offset}
+        if shift_dx:
+            report_params["projection_shift_px"] = {
+                "n_frames": len(shift_dx),
+                "dx_median": round(statistics.median(shift_dx), 1),
+                "dy_median": round(statistics.median(shift_dy), 1),
+                "dx_p10": round(_pct(shift_dx, 10), 1),
+                "dx_p90": round(_pct(shift_dx, 90), 1),
+                "dy_p10": round(_pct(shift_dy, 10), 1),
+                "dy_p90": round(_pct(shift_dy, 90), 1),
+            }
         if tracking_cfg.enabled:
             report_params["temporal_tracking"] = tracking_cfg.__dict__
         report_path.write_text(json.dumps(
@@ -804,6 +1058,29 @@ def main():
     matched_pct = 100.0 * stats["matched"] / max(stats["detections"], 1)
     print(f"frames={stats['frames']} detections={stats['detections']} "
           f"matched={stats['matched']} ({matched_pct:.1f}%)")
+    stated, unknown = stats["detections_stated"], stats["detections_state_unknown"]
+    if unknown:
+        print(f"  of which state read: {stats['matched_stated']}/{stated} "
+              f"({100.0 * stats['matched_stated'] / max(stated, 1):.1f}%)   "
+              f"state unknown: {stats['matched_state_unknown']}/{unknown} "
+              f"({100.0 * stats['matched_state_unknown'] / max(unknown, 1):.1f}%)")
+    if shift_dx:
+        print(f"  projection offset removed on {len(shift_dx)} frames "
+              f"(dx median {statistics.median(shift_dx):+.1f} px, "
+              f"dy median {statistics.median(shift_dy):+.1f} px"
+              + (f", carried {stats['projection_shift_carried']}"
+                 if stats["projection_shift_carried"] else "")
+              + (f", unavailable {stats['projection_shift_unavailable']}"
+                 if stats["projection_shift_unavailable"] else "") + ")")
+    if stats["back_face_penalty_applied"]:
+        print(f"  back-face penalty applied to {stats['back_face_penalty_applied']} pairings")
+    if stats["state_suppressed"]:
+        print(f"  state withdrawn by --min-state-score "
+              f"{args.min_state_score:g}: {stats['state_suppressed']}")
+    if stats[f"l1_signals:{BOX_LEVEL_LAMP}"]:
+        print(f"L1 box_level: housing={stats[f'l1_signals:{BOX_LEVEL_HOUSING}']} "
+              f"lamp={stats[f'l1_signals:{BOX_LEVEL_LAMP}']} "
+              f"(lamp-level matching {args.lamp_level_matching})")
     if tracking_cfg.enabled:
         print(f"tracking: low_candidates={stats['tracking_low_candidates']} "
               f"low_matched={stats['tracking_low_matched']} "

@@ -188,12 +188,18 @@ def convert(xml_path: Path, dataset_root: Path) -> dict:
                         "facing": attrs.get("facing", ""),
                         "raw_state": attrs.get("raw_state", ""),
                         "detector_score": attrs.get("detector_score", ""),
+                        "state_score": attrs.get("state_score", ""),
                         "source_type": attrs.get("source_type")
                                        or ("manual" if is_new else "auto"),
+                        # a box a reviewer drew outlines the housing
+                        "box_level": attrs.get("box_level") or "housing",
                         "temporal_source": attrs.get("temporal_source", ""),
                         "track_id": attrs.get("track_id", ""),
                         "tracking_status": attrs.get("tracking_status", ""),
                         "tracking_lost_frames": attrs.get("tracking_lost_frames", ""),
+                        "source_track_id": attrs.get("source_track_id", ""),
+                        "source_track_name": attrs.get("source_track_name", ""),
+                        "source_detection_id": attrs.get("source_detection_id", ""),
                     },
                 }
             )
